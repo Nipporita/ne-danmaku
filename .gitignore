@@ -1,0 +1,5 @@
+dist/
+config.json
+__pycache__/
+.venv/
+node_modules/

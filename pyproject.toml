@@ -1,0 +1,32 @@
+[project]
+name = "nekocast-danmaku"
+version = "0.1.0"
+description = "Standalone danmaku gateway extracted from Nekocast"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.118.0",
+    "uvicorn[standard]>=0.37.0",
+    "pydantic>=2.9.0",
+    "loguru>=0.7.3",
+    "regex>=2024.0.0",
+    "aiohttp>=3.13.0",
+    "satori-python>=0.12.0",
+    "launart>=0.8.0",
+    "graia-amnesia>=0.9.0",
+    "blivedm",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.17,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+override-dependencies = [
+    "aiohttp >= 3.13, <3.14",
+    "yarl >=1.17, <2.0"
+]
+[tool.uv.build-backend]
+module-root = ""
+[tool.uv.sources]
+blivedm = { git = "https://github.com/xfgryujk/blivedm.git" }

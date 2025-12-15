@@ -1,0 +1,21 @@
+{
+  "name": "nekocast-danmaku-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "danmaku": "^2.0.9",
+    "vue": "^3.4.0",
+    "vue-router": "^4.2.5",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.0",
+    "vite": "^5.0.0"
+  }
+}

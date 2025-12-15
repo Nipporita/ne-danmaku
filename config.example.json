@@ -1,0 +1,25 @@
+{
+  "host": "0.0.0.0",
+  "port": 8000,
+  "danmaku": {
+    "upstream": {
+      "token": "管理用 token，请修改并不要泄漏"
+    },
+    "satori": {
+      "host": "127.0.0.1",
+      "port": 5500,
+      "path": "/",
+      "token": "YOUR_SATORI_TOKEN",
+      "group_map": {
+        "QQ群号": "房间名"
+      }
+    },
+    "bilibili": {
+      "room_ids": {
+        "B站直播房号": "房间名"
+      },
+      "sess_data": "B站登录用 SESS_DATA"
+    },
+    "blacklists": []
+  }
+}
