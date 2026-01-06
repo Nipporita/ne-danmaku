@@ -6,7 +6,7 @@ from satori.element import Element, Text, Image
 from .DanmakuMessage import *
 
 SC_PATTERN = re.compile(
-    r"^/sc\s+(?P<duration>\d+)\s+(?P<text>.+)$",
+    r"^/sc(?:\s+(?P<duration>\d+))?\s+(?P<text>.+)$",
     re.IGNORECASE
 )
 
@@ -51,12 +51,9 @@ class DanmakuBuilder:
             constructed = parse_command(text)
             if constructed is None:
                 constructed = {
-                    "position": None,
-                    "color": None,
                     "text": text,
                 }
             return PlainDanmakuMessage(
-                text=text,
                 senderId=senderId,
                 sender=sender,
                 **constructed,
@@ -71,6 +68,7 @@ class DanmakuBuilder:
         elif message_type == "superchat":
             text = "".join(i.text for i in elements if isinstance(i, Text)).strip()
             sc_info = parse_sc(text)
+            print(sc_info)
             if sc_info is None:
                 # 总可以构建成普通弹幕
                 return PlainDanmakuMessage(
@@ -190,8 +188,6 @@ def parse_command(raw: str):
 
     if not tokens:
         return {
-            "position": None,
-            "color": None,
             "text": s,
         }
 
@@ -217,6 +213,13 @@ def parse_command(raw: str):
         elif kind == "color":
             color = m.group()
 
+    if position is None:
+        position = 'scroll'
+    elif position == "置顶":
+        position = "top"
+    elif position == "置底":
+        position = "bottom"
+    
     return {
         "position": position,
         "color": color,
@@ -239,7 +242,11 @@ def parse_sc(raw: str):
     if not m:
         return None
 
+    duration = m.group("duration")
+    if duration is None:
+        duration = 10
+    
     return {
-        "duration": int(m.group("duration")),
+        "duration": int(duration),
         "text": m.group("text"),  # 保留原始空格
     }

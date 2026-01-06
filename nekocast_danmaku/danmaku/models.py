@@ -9,7 +9,7 @@ import json
 import regex
 import time
 from collections import defaultdict, deque
-from typing import Literal, Annotated
+from typing import Literal, Annotated, Optional
 from pathlib import Path
 
 from fastapi import WebSocket
@@ -41,7 +41,6 @@ class DanmakuPacket(BaseModel):
         if not self.danmaku and not self.control:
             raise ValueError("Packet must include danmaku or control payload")
         return self
-
 
 # =========================
 # 弹幕过滤器
@@ -104,6 +103,15 @@ class BlacklistService:
             logger.info("Message blocked by forbidden user: {}", message.senderId)
             return True
 
+        # ---------- 用户昵称黑名单（按照文本匹配） ----------
+        if message.type in ('superchat', 'gift') and message.sender:
+            for pattern in self._patterns:
+                if pattern.search(message.sender):
+                    # logger.info("Message blocked by forbidden sender name: {}...", message.sender[:20])
+                    # 替换敏感词
+                    text = pattern.sub(lambda m: '*' * len(m.group(0)), text)
+                    # return True  # 你可以选择是否过滤整条消息
+        
         # ---------- 文本黑名单 ----------
         text = getattr(message, "text", None)
         if not text:
@@ -164,7 +172,7 @@ class DanmakuFilter:
         self.dedup_window = dedup_window  # 去重时间窗口（秒）
 
         # 记录最近弹幕：
-        # group -> deque[(text, timestamp)]
+        # group -> deque[(text, timestamp, should_filter)]
         self.recent_messages: dict[str, deque] = defaultdict(deque)
 
         self.blacklist: BlacklistService | None = blacklist
@@ -330,3 +338,53 @@ class ConnectionManager:
 
         for ws in disconnected:
             self.disconnect_client(ws, group)
+            
+class DedupQueue:
+    def __init__(self, dedup_window: float, blacklist_window: float = 20):
+        self.filter_dedup_window = dedup_window
+        self.filter_queue: deque[tuple[tuple[str | None, str], float, bool]] = deque()
+        self.filter_seen: set[tuple[str | None, str]] = set()
+
+        self.blacklist_dedup_window = blacklist_window
+        self.blacklist_queue: deque[tuple[tuple[str | None, str], float, bool]] = deque()
+        self.blacklist_seen: dict[tuple[str | None, str], bool] = dict()
+
+    def _message_key(self, message: 'DanmakuMessage') -> tuple:
+        """根据弹幕类型动态生成去重/黑名单 key"""
+        if message.type in ('superchat', 'gift') and message.sender:
+            return (message.sender, message.text)
+        return (None, message.text)
+
+    def _clean_queue(self):
+        now = time.time()
+        while self.filter_queue and now - self.filter_queue[0][1] > self.filter_dedup_window:
+            key, ts, should_filter = self.filter_queue.popleft()
+            self.filter_seen.remove(key)
+            self.blacklist_queue.append((key, ts, should_filter))
+            self.blacklist_seen[key] = should_filter
+
+        while self.blacklist_queue and now - self.blacklist_queue[0][1] > self.blacklist_dedup_window:
+            key, _, _ = self.blacklist_queue.popleft()
+            self.blacklist_seen.pop(key, None)
+
+    def add(self, message: DanmakuMessage, blacklist: Optional['BlacklistService'] = None) -> bool:
+        self._clean_queue()
+        key = self._message_key(message)
+
+        # 短期去重
+        if key in self.filter_seen:
+            return True
+
+        # 黑名单缓存
+        if key in self.blacklist_seen:
+            return self.blacklist_seen[key]
+
+        # 黑名单检测
+        should_filter = False
+        if blacklist and blacklist.should_filter(message):
+            should_filter = True
+
+        self.filter_queue.append((key, time.time(), should_filter))
+        self.filter_seen.add(key)
+
+        return should_filter

@@ -117,28 +117,6 @@ async def start_satori_client(
             elements,
         )
 
-        # # 如果消息中包含非文本元素（如图片、表情），则忽略
-        # if not all(isinstance(i, Text) for i in elements):
-        #     return
-
-        # # 拼接所有文本元素，得到最终文本
-        # text = "".join(i.text for i in elements if isinstance(i, Text)).strip()
-
-        # # 检查是否以 #RRGGBB 形式指定颜色
-        # if matches := regex.match(r"^(.+)(#[0-9a-fA-F]{6})$", text):
-        #     text = matches.group(1)
-        #     color = matches.group(2)
-        # else:
-        #     color = None
-
-        # # 构造统一的弹幕消息对象
-        # danmaku = DanmakuMessage(
-        #     text=text,
-        #     senderId=str(userid),
-        #     sender=username,
-        #     color=color,
-        # )
-        
         # 使用 DanmakuMessage 的工厂方法构造消息对象
         danmaku = DanmakuBuilder.create(
             senderId=str(userid),
@@ -155,6 +133,14 @@ async def start_satori_client(
                 elements,
             )
             return
+        else:
+            logger.debug(
+                "构建弹幕消息成功，频道: {}, 用户: {}-{}, 弹幕对象: {}",
+                danmaku_channel,
+                userid,
+                username,
+                danmaku,
+            )
         
         # 将弹幕广播到对应分组的所有连接
         await connection_manager.broadcast_to_group(

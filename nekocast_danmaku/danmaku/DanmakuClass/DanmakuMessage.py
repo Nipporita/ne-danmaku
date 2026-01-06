@@ -48,6 +48,7 @@ class EmoteMessage(DanmakuBase):
 
 class SuperChatMessage(DanmakuBase):
     type: Literal["superchat"] = "superchat"  # 弹幕类型
+    text: str                     # 弹幕内容
     
     """超级聊天消息结构（继承自 DanmakuMessage）"""
     duration: int               # 显示时长（秒）
