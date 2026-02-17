@@ -5,6 +5,8 @@ import Danmaku from 'danmaku'
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 // 引入 zod，用于配置参数校验与默认值处理
 import { z } from 'zod'
+// 引入图片缓存系统
+import { EmojiManager, EmojiQueueScheduler } from './EmojiCache'
 
 // 定义组件 props：房间 ID，用于区分弹幕房间
 const props = defineProps({
@@ -45,6 +47,37 @@ function getConfig() {
   return configSchema.parse(Object.fromEntries(params))
 }
 
+const emojiManager = new EmojiManager()
+
+const emojiScheduler = new EmojiQueueScheduler(
+  emojiManager,
+  (msg, img) => {
+    // 读取当前配置
+    const config = getConfig()
+    // 使用消息自带字号或默认字号
+    const size = msg.size ?? config.defaultSize
+
+    const payload = {
+      render: function() {
+        img.style.width = `${2*size}px`
+        img.style.height = `${2*size}px`
+        img.style.display = "block"   // 防止 inline 抖动
+        img.style.objectFit = "contain"
+        img.style.opacity = overlayOpacity.value ?? 1
+        return img
+      }
+    }
+
+    danmaku.value.emit(payload)
+  },
+  {
+    maxPerFrame: 6,
+    maxQueueSize: 800,
+  }
+)
+
+emojiScheduler.start()
+
 // 向 Danmaku 实例发送一条弹幕
 function sendMessage(msg) {
   // 未初始化弹幕实例时直接返回
@@ -57,24 +90,33 @@ function sendMessage(msg) {
   const color = msg.color ?? config.defaultColor
   // 使用消息自带字号或默认字号
   const size = msg.size ?? config.defaultSize
+  // 使用消息自带pos或默认pos，默认为滚动弹幕
+  const mode = msg.position ?? 'rtl'
 
-  // 构造弹幕负载
-  const payload = {
-    text: msg.text,
-    style: {
-      fontFamily: config.font,
-      fontSize: `${size}px`,
-      fontWeight: 'bold',
-      color,
-      // 描边阴影，增强可读性
-      textShadow: '#000 1px 0px 1px, #000 0px 1px 1px, #000 0px -1px 1px, #000 -1px 0px 1px',
-      // 使用当前全局透明度
-      opacity: overlayOpacity.value ?? 1,
-    },
+  if (msg.type === 'plain') {
+    // 构造弹幕负载
+    const payload = {
+      mode: mode,
+      text: msg.text,
+      style: {
+        fontFamily: config.font,
+        fontSize: `${size}px`,
+        fontWeight: 'bold',
+        color,
+        // 描边阴影，增强可读性
+        textShadow: '#000 1px 0px 1px, #000 0px 1px 1px, #000 0px -1px 1px, #000 -1px 0px 1px',
+        // 使用当前全局透明度
+        opacity: overlayOpacity.value ?? 1,
+      },
+    }
+
+    // 发射弹幕
+    danmaku.value.emit(payload)
+  } else if (msg.type === 'emote') {
+    // 处理表情弹幕，假设 msg.text 是图片 URL
+    emojiScheduler.sendEmote(msg)
   }
-
-  // 发射弹幕
-  danmaku.value.emit(payload)
+  
 }
 
 // 建立 WebSocket 连接

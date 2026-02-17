@@ -23,6 +23,10 @@ from .config import AppConfig, load_config
 # AppConfig：全局配置结构
 # load_config：从配置文件加载配置
 
+from .emoji.cache import EmojiCache
+from .emoji.routes import router as emoji_router
+
+import asyncio
 
 def create_app(config: AppConfig | None = None) -> FastAPI:
     """Create a FastAPI instance configured for danmaku services only."""
@@ -55,6 +59,16 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     # 注册 API 路由
     register_routers(app, config)
+    
+    # 创建 emoji 缓存
+    app.state.emoji_cache = EmojiCache()
+
+    # 注册 emoji 路由
+    app.include_router(
+        emoji_router,
+        prefix="/api/emoji",
+        tags=["emoji"],
+    )
 
     # 注册启动 / 关闭事件
     register_event_handlers(app, config)
@@ -134,6 +148,9 @@ def register_event_handlers(app: FastAPI, config: AppConfig) -> None:
 
         # 初始化弹幕相关组件
         await startup_danmaku(app, config)
+        
+        # 启动 emoji 清理任务
+        asyncio.create_task(app.state.emoji_cache.cleanup_loop())
 
         logger.info("Danmaku service ready")
         logger.info("=" * 60)
@@ -186,6 +203,7 @@ async def startup_danmaku(app: FastAPI, config: AppConfig) -> None:
         await start_satori_client(
             config.danmaku.satori,
             connection_manager,
+            app.state.emoji_cache,
         )
         logger.info("Satori client started")
 

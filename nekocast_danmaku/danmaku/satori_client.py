@@ -31,6 +31,7 @@ from .DanmakuClass.DanmakuBuilder import DanmakuBuilder
 # ConnectionManager：本地弹幕连接管理器
 # DanmakuMessage：统一的弹幕消息数据结构
 
+from ..emoji.cache import EmojiCache
 
 # =========================
 # 全局状态（确保只启动一个客户端）
@@ -46,6 +47,7 @@ launart: Launart | None = None
 async def start_satori_client(
     config: SatoriConfig,
     connection_manager: ConnectionManager,
+    emoji_cache: EmojiCache,
 ) -> Task:
     """启动 Satori 客户端
     
@@ -79,6 +81,8 @@ async def start_satori_client(
     # =========================
     # 注册消息事件处理器 （需要大改）
     # =========================
+    
+    users = set()  # 用于记录已获取过的用户 ID，避免重复日志
 
     @client.register_on(EventType.MESSAGE_CREATED)
     async def handle_message(account: Account, event: MessageEvent):
@@ -142,11 +146,79 @@ async def start_satori_client(
                 danmaku,
             )
         
+        if danmaku.type == "emote":
+            # 如果是表情消息，尝试缓存表情图片
+            emoji_url = await emoji_cache.load_emoji(danmaku.emote_url, userid)
+            if emoji_url is None:
+                logger.warning(
+                    "表情图片缓存失败，频道: {}, 用户: {}-{}, URL: {}",
+                    danmaku_channel,
+                    userid,
+                    username,
+                    danmaku.emote_url,
+                )
+                return
+            else:
+                logger.debug(
+                    "表情图片缓存成功，频道: {}, 用户: {}-{}, URL: {}",
+                    danmaku_channel,
+                    userid,
+                    username,
+                    danmaku.emote_url,
+                )
+                danmaku.emote_url = emoji_url
+        
         # 将弹幕广播到对应分组的所有连接
         await connection_manager.broadcast_to_group(
             danmaku_channel,
             danmaku,
         )
+    
+    # =========================
+    # 获取群组列表
+    # =========================
+    group_ids = list(config.group_map.keys())
+    
+    @client.lifecycle
+    async def on_ready(account: Account, *args, **kwargs):
+        nonlocal users
+        
+        logger.info("Satori 客户端已连接，正在获取频道列表")
+        
+        async for guild in account.guild_list():
+            if guild.id in group_ids:
+                logger.info(
+                    "获取到配置的频道，频道 ID: {}, 频道名称: {}",
+                    guild.id,
+                    guild.name,
+                )
+                async for user in account.guild_member_list(guild.id):
+                    logger.debug(
+                        "获取到频道成员，频道 ID: {}, 用户名: {}",
+                        guild.id,
+                        user.user.name
+                    )
+                    users.add(user.user.id)
+            else:
+                logger.debug(
+                    "获取到未配置的频道，频道 ID: {}, 频道名称: {}",
+                    guild.id,
+                    guild.name,
+                )
+    
+    @client.register_on(EventType.GUILD_MEMBER_ADDED)
+    async def handle_member_added(account: Account, event):
+        nonlocal users
+        
+        if event.guild.id in group_ids:
+            user = event.user
+            if user.id not in users:
+                logger.info(
+                    "新成员加入配置的频道，频道 ID: {}, 用户名: {}",
+                    event.guild.id,
+                    user.name,
+                )
+                users.add(user.id)
 
     # =========================
     # 启动 Launart 组件

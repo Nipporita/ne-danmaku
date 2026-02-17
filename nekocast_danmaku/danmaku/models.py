@@ -107,9 +107,9 @@ class BlacklistService:
         if message.type in ('superchat', 'gift') and message.sender:
             for pattern in self._patterns:
                 if pattern.search(message.sender):
-                    # logger.info("Message blocked by forbidden sender name: {}...", message.sender[:20])
+                    logger.info("Message blocked by forbidden sender name: {}, triggered by pattern: {}", message.sender, pattern.pattern)
                     # 替换敏感词
-                    text = pattern.sub(lambda m: '*' * len(m.group(0)), text)
+                    message.sender = pattern.sub(lambda m: '*' * len(m.group(0)), message.sender)
                     # return True  # 你可以选择是否过滤整条消息
         
         # ---------- 文本黑名单 ----------
@@ -180,30 +180,32 @@ class DanmakuFilter:
     def should_filter(self, group: str, message: DanmakuMessage) -> bool:
         """判断一条弹幕是否应该被过滤"""
 
-        text = message.text
         current_time = time.time()
 
         # ---------- 黑名单过滤 ----------
         if self.blacklist and self.blacklist.should_filter(message):
             return True
+        
+        # ---------- 文字去重过滤 ----------
+        if message.type in ('plain', 'superchat'):
+            text = message.text
 
-        # ---------- 去重过滤 ----------
-        # dedup_window <= 0 表示不启用去重
-        if self.dedup_window > 0:
-            recent = self.recent_messages[group]
+            # dedup_window <= 0 表示不启用去重
+            if self.dedup_window > 0:
+                recent = self.recent_messages[group]
 
-            # 清理超过时间窗口的历史记录
-            while recent and current_time - recent[0][1] > self.dedup_window:
-                recent.popleft()
+                # 清理超过时间窗口的历史记录
+                while recent and current_time - recent[0][1] > self.dedup_window:
+                    recent.popleft()
 
-            # 检查是否出现过完全相同的弹幕
-            for recent_text, _ in recent:
-                if recent_text == text:
-                    logger.info(f"重复消息被过滤: {text[:20]}...")
-                    return True
+                # 检查是否出现过完全相同的弹幕
+                for recent_text, _ in recent:
+                    if recent_text == text:
+                        logger.info(f"重复消息被过滤: {text[:20]}...")
+                        return True
 
-            # 记录当前弹幕
-            recent.append((text, current_time))
+                # 记录当前弹幕
+                recent.append((text, current_time))
 
         return False
     

@@ -15,8 +15,8 @@ GIFT_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-POSITION_RE = re.compile(r"/(?:置顶|置底)", re.IGNORECASE)
-COLOR_RE = re.compile(r"\#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?")
+POSITION_RE = re.compile(r"/(?:置顶|置底)\s+", re.IGNORECASE)
+COLOR_RE = re.compile(r"\#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?\s+", re.IGNORECASE)
 
 class DanmakuBuilder:
     @staticmethod
@@ -209,12 +209,12 @@ def parse_command(raw: str):
     # 提取 token 内容
     for kind, m in tokens:
         if kind == "position":
-            position = m.group()[1:]
+            position = m.group()[1:].strip()  # 去掉斜杠和空格
         elif kind == "color":
-            color = m.group()
+            color = m.group().strip()  # 保留原始颜色值，去掉空格
 
     if position is None:
-        position = 'scroll'
+        position = 'rtl'  # 默认滚动
     elif position == "置顶":
         position = "top"
     elif position == "置底":
