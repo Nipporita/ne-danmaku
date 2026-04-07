@@ -57,11 +57,11 @@
     },
     "cash": {
       "enabled": true,
-      "initial_huo_amount": 0.0,
+      "initial_huo": 0.0,
       "reward_huo_per_message": 0.0,
       "reward_huo_interval_seconds": 60,
       "reward_huo_per_interval": 1.0,
-      "initial_yuan_amount": 100.0,
+      "initial_yuan": 100.0,
       "reward_yuan_per_message": 0.0,
       "reward_yuan_interval_seconds": 0.0,
       "reward_yuan_per_interval": 0.0,

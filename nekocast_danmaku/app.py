@@ -216,11 +216,13 @@ async def startup_danmaku(app: FastAPI, config: AppConfig) -> None:
         reward_huo_per_message=max(0.0, float(config.danmaku.cash.reward_huo_per_message)),
         reward_huo_interval_seconds=max(0, int(config.danmaku.cash.reward_huo_interval_seconds)),
         reward_huo_per_interval=max(0.0, float(config.danmaku.cash.reward_huo_per_interval)),
+        
         initial_yuan=max(0.0, float(config.danmaku.cash.initial_yuan)),
         reward_yuan_per_message=max(0.0, float(config.danmaku.cash.reward_yuan_per_message)),
         reward_yuan_interval_seconds=max(0, int(config.danmaku.cash.reward_yuan_interval_seconds)),
         reward_yuan_per_interval=max(0.0, float(config.danmaku.cash.reward_yuan_per_interval)),
     )
+    
     db_path = config.danmaku.cash.db_path or "cash.db"
     room_cash_system = RoomCashSystem(db_path, cash_policy)
 
