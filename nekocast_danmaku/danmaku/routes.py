@@ -181,8 +181,8 @@ def create_router(config: DanmakuConfig) -> APIRouter:
         """
         validate_admin_token(token)
         
-        amount_yuan = max(0.0, float(charge.yuan))
-        amount_huo = max(0.0, float(charge.huo))
+        amount_yuan = float(charge.yuan)
+        amount_huo = float(charge.huo)
         
         user_id = charge.user_id.strip()
         
