@@ -17,8 +17,7 @@ from pydantic import BaseModel, Field
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-BLACKLIST_PATH = PROJECT_ROOT / "assets_danmaku" / "blacklist.txt"
-FORBIDDEN_USERS_PATH = PROJECT_ROOT / "assets_danmaku" / "forbidden_users.txt"
+DEFAULT_ASSET_DIR = PROJECT_ROOT / "assets_danmaku"
 
 
 # =========================
@@ -78,10 +77,18 @@ class CashConfig(BaseModel):
     """Cash accrual and spending policy for non-Bilibili sources."""
 
     enabled: bool = True
-    initial_amount: float = 10.0
-    reward_per_message: float = 0.0
-    reward_interval_seconds: int = 0
-    reward_per_interval: float = 0.0
+    
+    initial_huo: float = 0.0
+    reward_huo_per_message: float = 0.0
+    reward_huo_interval_seconds: int = 0
+    reward_huo_per_interval: float = 0.0
+    
+    initial_yuan: float = 100.0
+    reward_yuan_per_message: float = 0.0
+    reward_yuan_interval_seconds: int = 0
+    reward_yuan_per_interval: float = 0.0
+    
+    db_path: Optional[Path] = None
 
 
 class DanmakuConfig(BaseModel):
@@ -96,9 +103,17 @@ class DanmakuConfig(BaseModel):
     
     dedup_window: int = 5  # 去重时间窗口，单位秒
 
-    # ⚠️ 只保留路径，不加载内容
-    blacklist_file: Path = BLACKLIST_PATH
-    forbidden_users_file: Path = FORBIDDEN_USERS_PATH
+    asset_dir: Path = DEFAULT_ASSET_DIR
+    blacklist_file: Optional[Path] = None
+    forbidden_users_file: Optional[Path] = None
+
+    @property
+    def resolved_blacklist_file(self) -> Path:
+        return self.blacklist_file or self.asset_dir / "blacklist.txt"
+
+    @property
+    def resolved_forbidden_users_file(self) -> Path:
+        return self.forbidden_users_file or self.asset_dir / "forbidden_users.txt"
 
 
 class AppConfig(BaseModel):

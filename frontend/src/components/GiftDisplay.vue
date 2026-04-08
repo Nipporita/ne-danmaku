@@ -16,14 +16,14 @@
                 }"
             >
                 <div class="gift-avatar">
-                    <img :src="gift.avatar || 'https://placeholder.im/100x100/cccccc'" alt="avatar" />
+                    <img :src="gift.avatar" alt="avatar" v-if="gift.avatar" />
                 </div>
                 <div class="gift-text-wrap">
                     <div class="gift-user">{{ gift.user }} 投喂</div>
                     <div class="gift-text">{{ gift.name }}</div>
                 </div>
                 <div class="gift-image">
-                    <img :src="gift.imageURL || 'https://placeholder.im/100x100/ff0000'" alt="gift" />
+                    <img :src="gift.imageURL" alt="gift" v-if="gift.imageURL" />
                 </div>
                 <div class="gift-amount">x{{ gift.amount }}</div>
             </div>
