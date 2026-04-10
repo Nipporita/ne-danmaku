@@ -68,6 +68,7 @@
       "db_path": "cash.db"
     },
     "room_db_path": "room.db",
+    "emote_alias_token": "表情别名管理 token，请修改",
     "blacklists": []
   }
 }

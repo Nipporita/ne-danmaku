@@ -42,7 +42,8 @@ class RoomSettings(BaseModel):
     """每个房间的动态弹幕设置。"""
 
     overlay_opacity: float = 100.0
-    enable_emoji: bool = True
+    enable_external_emoji: bool = True
+    enable_internal_emoji: bool = True
     enable_superchat: bool = True
     enable_gift: bool = True
     bind_position: bool = True
@@ -298,6 +299,7 @@ class ConnectionManager:
         self,
         danmaku_filter: DanmakuFilter | None = None,
         room_settings_service: RoomSettingsService | None = None,
+        emote_resolver=None,
     ):
         # 客户端连接：
         # group -> set[WebSocket]
@@ -308,6 +310,7 @@ class ConnectionManager:
 
         self.danmaku_filter = danmaku_filter
         self.room_settings_service = room_settings_service
+        self.emote_resolver = emote_resolver
 
     # ---------- 连接管理 ----------
 
@@ -371,6 +374,22 @@ class ConnectionManager:
         # 过滤检查
         if self.danmaku_filter and self.danmaku_filter.should_filter(group, message):
             return
+
+        # 内置表情解析：将 [emote_name] 文本转为 EmoteMessage
+        if (
+            isinstance(message, PlainDanmakuMessage)
+            and self.emote_resolver is not None
+            and self.room_settings_service is not None
+            and self.room_settings_service.get(group).enable_internal_emoji
+        ):
+            emote_url = self.emote_resolver.resolve(message.text)
+            if emote_url is not None:
+                message = EmoteMessage(
+                    emote_url=emote_url,
+                    senderId=message.senderId,
+                    sender=message.sender,
+                    is_special=message.is_special,
+                )
 
         # 特殊弹幕追加标识
         if message.is_special and isinstance(message, PlainDanmakuMessage):

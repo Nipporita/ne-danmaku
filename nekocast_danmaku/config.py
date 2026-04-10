@@ -103,6 +103,7 @@ class DanmakuConfig(BaseModel):
     
     room_db_path: Optional[Path] = None
     dedup_window: int = 5  # 去重时间窗口，单位秒
+    emote_alias_token: Optional[str] = None
 
     asset_dir: Path = DEFAULT_ASSET_DIR
     blacklist_file: Optional[Path] = None

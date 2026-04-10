@@ -121,6 +121,7 @@ def create_api_router(config: AppConfig) -> APIRouter:
     from .danmaku.routes import create_router as create_danmaku_router
     from .emoji.routes import router as emoji_router
     from .emotes.routes import create_emote_router
+    from .emotes.alias_routes import create_emote_alias_router
 
     danmaku_router = create_danmaku_router(config.danmaku)
     router.include_router(danmaku_router, prefix="/api/danmaku/v1", tags=["danmaku"])
@@ -130,6 +131,13 @@ def create_api_router(config: AppConfig) -> APIRouter:
         prefix="/api/danmaku/v1/emotes",
         tags=["emotes"],
     )
+
+    if config.danmaku.emote_alias_token:
+        router.include_router(
+            create_emote_alias_router(config.danmaku.emote_alias_token),
+            prefix="/api/danmaku/v1/emote-alias",
+            tags=["emote-alias"],
+        )
 
     return router
 
@@ -214,10 +222,20 @@ async def startup_danmaku(app: FastAPI, config: AppConfig) -> None:
     room_db = RoomDB(room_db_path)
     room_settings_service = RoomSettingsService(room_db=room_db)
 
+    # 扫描自定义表情包
+    from .emotes.scanner import scan_emotes
+    emote_mapping = scan_emotes(config.danmaku.asset_dir)
+    app.state.emote_mapping = emote_mapping
+
+    # 内置表情解析器（含别名）
+    from .emotes.resolver import EmoteResolver
+    emote_resolver = EmoteResolver(emote_mapping, room_db)
+
     # 创建 WebSocket 连接管理器
     connection_manager = ConnectionManager(
         danmaku_filter=danmaku_filter,
         room_settings_service=room_settings_service,
+        emote_resolver=emote_resolver,
     )
 
     cash_cfg = config.danmaku.cash
@@ -239,10 +257,7 @@ async def startup_danmaku(app: FastAPI, config: AppConfig) -> None:
     # 挂载到 app.state，供路由和其他模块使用
     app.state.danmaku_manager = connection_manager
     app.state.room_cash_system = room_cash_system
-
-    # 扫描自定义表情包
-    from .emotes.scanner import scan_emotes
-    app.state.emote_mapping = scan_emotes(config.danmaku.asset_dir)
+    app.state.room_db = room_db
 
     # 如果配置了 Satori 上游，则启动对应客户端
     if config.danmaku.satori:

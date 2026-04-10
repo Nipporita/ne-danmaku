@@ -25,7 +25,8 @@ const giftRef = ref(null)
 const danmakuResizeCleanup = ref(null)
 const roomSettings = ref({
   overlay_opacity: 100,
-  enable_emoji: true,
+  enable_external_emoji: true,
+  enable_internal_emoji: true,
   enable_superchat: true,
   enable_gift: true,
   bind_position: true,
@@ -48,25 +49,16 @@ const assetReadyQueue = new AssetReadyQueue(assetManager, {
   maxConcurrent: 6,
 })
 
-const emoteMapping = ref({})
-const EMOTE_PATTERN = /^[\[【](.+?)[\]】]$/
-
-async function loadEmoteMapping() {
-  try {
-    const resp = await fetch('/api/danmaku/v1/emotes')
-    if (resp.ok) {
-      emoteMapping.value = await resp.json()
-    }
-  }
-  catch (e) {
-    console.warn('Failed to load emote mapping', e)
-  }
+function resolveEmoteUrl(emoteUrl) {
+  // Internal emotes already have a full path; external ones need the emoji proxy prefix
+  return emoteUrl.startsWith('/') ? emoteUrl : `/api/emoji/${emoteUrl}`
 }
 
 function applyRoomSettings(settings) {
   roomSettings.value = {
     overlay_opacity: Number(settings?.overlay_opacity ?? 100),
-    enable_emoji: Boolean(settings?.enable_emoji ?? true),
+    enable_external_emoji: Boolean(settings?.enable_external_emoji ?? true),
+    enable_internal_emoji: Boolean(settings?.enable_internal_emoji ?? true),
     enable_superchat: Boolean(settings?.enable_superchat ?? true),
     enable_gift: Boolean(settings?.enable_gift ?? true),
     bind_position: Boolean(settings?.bind_position ?? true),
@@ -76,15 +68,16 @@ function applyRoomSettings(settings) {
 }
 
 function handleEmoji(msg) {
-  if (!roomSettings.value.enable_emoji)
+  if (!roomSettings.value.enable_external_emoji)
     return
+  const url = resolveEmoteUrl(msg.emote_url)
   const task = {
     id: msg.emote_url,
-    resourceKeys: [`/api/emoji/${msg.emote_url}`],
-    payload: msg,
+    resourceKeys: [url],
+    payload: { ...msg, _resolvedUrl: url },
     onReady: (payload) => {
       const img = new Image()
-      img.src = `/api/emoji/${payload.emote_url}`
+      img.src = payload._resolvedUrl
       emitEmoji(payload, img)
     },
   }
@@ -106,26 +99,6 @@ function emitEmoji(msg, img) {
     },
   }
 
-  danmaku.value.emit(payload)
-}
-
-function emitCustomEmote(emoteUrl, msg) {
-  if (!danmaku.value)
-    return
-  const config = getConfig()
-  const size = msg.size ?? config.defaultSize
-  const img = new Image()
-  img.src = emoteUrl
-  const payload = {
-    render: () => {
-      img.style.width = `${2 * size}px`
-      img.style.height = `${2 * size}px`
-      img.style.display = 'block'
-      img.style.objectFit = 'contain'
-      img.style.opacity = overlayOpacity.value ?? 1
-      return img
-    },
-  }
   danmaku.value.emit(payload)
 }
 
@@ -198,17 +171,6 @@ function sendMessage(msg) {
   const type = msg.type ?? 'plain'
 
   if (type === 'plain') {
-    // Check for text-to-emote conversion: [emote_name] or 【emote_name】
-    const emoteMatch = msg.text?.match(EMOTE_PATTERN)
-    if (emoteMatch) {
-      const emoteName = emoteMatch[1]
-      const emoteUrl = emoteMapping.value[emoteName]
-      if (emoteUrl) {
-        emitCustomEmote(emoteUrl, msg)
-        return
-      }
-    }
-
     const payload = {
       mode,
       text: msg.text,
@@ -304,7 +266,6 @@ function initDanmaku() {
 
 onMounted(() => {
   initDanmaku()
-  loadEmoteMapping()
   connectWebSocket()
 })
 
