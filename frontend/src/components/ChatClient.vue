@@ -39,7 +39,8 @@ const roomUsersLoading = ref(false)
 
 const roomSettings = ref({
   overlay_opacity: 100,
-  enable_emoji: true,
+  enable_external_emoji: true,
+  enable_internal_emoji: true,
   enable_superchat: true,
   enable_gift: true,
   bind_position: true,
@@ -150,7 +151,8 @@ async function fetchSettings() {
     const data = await resp.json()
     roomSettings.value = {
       overlay_opacity: Number(data.overlay_opacity ?? 100),
-      enable_emoji: Boolean(data.enable_emoji ?? true),
+      enable_external_emoji: Boolean(data.enable_external_emoji ?? true),
+      enable_internal_emoji: Boolean(data.enable_internal_emoji ?? true),
       enable_superchat: Boolean(data.enable_superchat ?? true),
       enable_gift: Boolean(data.enable_gift ?? true),
       bind_position: Boolean(data.bind_position ?? true),
@@ -423,7 +425,11 @@ watch(authToken, () => {
 })
 
 watch(() => props.roomId, () => {
-  fetchSettings()
+  clientSocket.value?.close()
+  upstreamSocket.value?.close()
+  reconnectAttempts.value = 0
+  messages.value = []
+  connectWebSocket()
 })
 
 onMounted(() => {
@@ -482,7 +488,8 @@ onUnmounted(() => {
         <input v-model.number="roomSettings.overlay_opacity" type="range" min="0" max="100">
         <span class="slider-value">{{ Math.round(roomSettings.overlay_opacity) }}%</span>
       </label>
-      <label class="toggle-item"><input v-model="roomSettings.enable_emoji" type="checkbox">启用 Emoji</label>
+      <label class="toggle-item"><input v-model="roomSettings.enable_external_emoji" type="checkbox">启用外部 Emoji（Satori/OneBot）</label>
+      <label class="toggle-item"><input v-model="roomSettings.enable_internal_emoji" type="checkbox">启用内部表情（【表情】）</label>
       <label class="toggle-item"><input v-model="roomSettings.enable_superchat" type="checkbox">启用 SuperChat</label>
       <label class="toggle-item"><input v-model="roomSettings.enable_gift" type="checkbox">启用礼物</label>
       <label class="toggle-item"><input v-model="roomSettings.bind_position" type="checkbox">允许置顶/置底定位</label>

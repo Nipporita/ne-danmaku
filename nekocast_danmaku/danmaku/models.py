@@ -375,6 +375,14 @@ class ConnectionManager:
         if self.danmaku_filter and self.danmaku_filter.should_filter(group, message):
             return
 
+        # 外部表情过滤：到达此处已是 EmoteMessage 的来自外部源
+        if (
+            isinstance(message, EmoteMessage)
+            and self.room_settings_service is not None
+            and not self.room_settings_service.get(group).enable_external_emoji
+        ):
+            return
+
         # 内置表情解析：将 [emote_name] 文本转为 EmoteMessage
         if (
             isinstance(message, PlainDanmakuMessage)

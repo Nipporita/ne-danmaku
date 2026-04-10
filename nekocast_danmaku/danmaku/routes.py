@@ -13,6 +13,12 @@ from pydantic import BaseModel
 
 from ..config import DanmakuConfig
 from .models import ConnectionManager, DanmakuPacket, RoomSettings
+from .danmaku_class.danmaku_message import (
+    PlainDanmakuMessage,
+    SuperChatMessage,
+    GiftMessage,
+)
+from .danmaku_class.danmaku_builder import parse_sc, parse_gift, parse_command
 
 
 def create_router(config: DanmakuConfig) -> APIRouter:
@@ -170,15 +176,50 @@ def create_router(config: DanmakuConfig) -> APIRouter:
                 data = await websocket.receive_text()
 
                 try:
-                    # 解析为 DanmakuPacket（仅弹幕）
-                    packet = DanmakuPacket.model_validate_json(data)
+                    raw = json.loads(data)
+                    group = raw.get("group", "")
+                    danmaku_raw = raw.get("danmaku", {})
+
+                    if "type" in danmaku_raw:
+                        # 已有 type 字段，按原有逻辑解析
+                        packet = DanmakuPacket.model_validate(raw)
+                        message = packet.danmaku
+                    else:
+                        # 无 type 字段：来自前端管理面板的简单格式
+                        # 解析 /sc、/gift、颜色/置顶等命令
+                        text = danmaku_raw.get("text", "").strip()
+                        sender = danmaku_raw.get("sender")
+                        sender_id = danmaku_raw.get("senderId")
+
+                        sc_info = parse_sc(text)
+                        gift_info = parse_gift(text)
+
+                        if sc_info is not None:
+                            message = SuperChatMessage(
+                                sender=sender,
+                                senderId=sender_id,
+                                **sc_info,
+                            )
+                        elif gift_info is not None:
+                            message = GiftMessage(
+                                sender=sender,
+                                senderId=sender_id,
+                                **gift_info,
+                            )
+                        else:
+                            cmd = parse_command(text)
+                            message = PlainDanmakuMessage(
+                                sender=sender,
+                                senderId=sender_id,
+                                **(cmd if cmd is not None else {"text": text}),
+                            )
 
                     # 上游发送的弹幕统一标记为特殊弹幕
-                    packet.danmaku.is_special = True
+                    message.is_special = True
 
                     # 广播弹幕到指定 group
                     await connection_manager.broadcast_to_group(
-                        packet.group, packet.danmaku
+                        group, message
                     )
 
                 except Exception as e:

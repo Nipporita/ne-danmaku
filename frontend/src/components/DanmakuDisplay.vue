@@ -68,8 +68,6 @@ function applyRoomSettings(settings) {
 }
 
 function handleEmoji(msg) {
-  if (!roomSettings.value.enable_external_emoji)
-    return
   const url = resolveEmoteUrl(msg.emote_url)
   const task = {
     id: msg.emote_url,
