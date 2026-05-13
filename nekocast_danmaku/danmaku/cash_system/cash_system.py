@@ -6,10 +6,18 @@ from sqlalchemy.orm import DeclarativeBase, mapped_column, Mapped, sessionmaker,
 
 from loguru import logger
 
+import hmac
+import hashlib
+import base64
+import json
+from sqlalchemy.exc import IntegrityError
+
+from .cash_exception import GiftCodeFormatError, GiftCodeRedeemError
+
+SECRET_KEY_DEFAULT = b"ChenYiHan17"
 
 class Base(DeclarativeBase):
     pass
-
 
 # -------------------- ORM Model --------------------
 class UserORM(Base):
@@ -29,6 +37,11 @@ class UserMetaORM(Base):
     last_interval_reward_huo_ts: Mapped[float] = mapped_column(Float, default=0.0)
     last_interval_reward_yuan_ts: Mapped[float] = mapped_column(Float, default=0.0)
 
+class UsedGiftCodeORM(Base):
+    __tablename__ = "used_gift_codes"
+
+    code_hash: Mapped[str] = mapped_column(String, primary_key=True)
+    used_at: Mapped[float] = mapped_column(Float, nullable=False)
 
 # -------------------- Policy --------------------
 @dataclass
@@ -43,6 +56,8 @@ class CashPolicy:
     reward_yuan_per_message: float = 0.0
     reward_yuan_interval_seconds: int = 0
     reward_yuan_per_interval: float = 0.0
+    
+    secret_key: str = "change_this_secret_key"
 
 
 class RoomCashSystem:
@@ -52,6 +67,7 @@ class RoomCashSystem:
             f"sqlite:///{db_path}",
             connect_args={"timeout": 5},
         )
+        self.secret_key = self.policy.secret_key.encode()
 
         # WAL 方式，建议用 exec_driver_sql
         with self.engine.begin() as conn:
@@ -347,3 +363,135 @@ class RoomCashSystem:
             session.query(UserORM).delete()
             session.query(UserMetaORM).delete()
             session.commit()
+    
+    @staticmethod
+    def generate_giftcode(
+        yuan: float,
+        huo: float,
+        user_id: str,
+        room_id: str,
+        secret_key: bytes = SECRET_KEY_DEFAULT,
+    ) -> str:
+        now = int(time.time())
+
+        payload = {
+            "yuan": yuan,
+            "huo": huo,
+            "user_id": user_id,
+            "room_id": room_id,
+            "ts": now,
+        }
+
+        payload_bytes = json.dumps(
+            payload,
+            separators=(",", ":"),
+        ).encode()
+
+        signature = hmac.new(
+            secret_key,
+            payload_bytes,
+            hashlib.sha256,
+        ).hexdigest()
+
+        return (
+            base64.urlsafe_b64encode(payload_bytes).decode()
+            + "."
+            + signature
+        )
+    
+    def redeem_giftcode(
+        self,
+        room_id: str,
+        user_id: str,
+        user_name: str,
+        giftcode: str,
+    ) -> dict:
+        
+        # 仅测试，shortcut
+        # 生成礼品码
+        # gc = self.generate_giftcode(
+        #     yuan=10.0,
+        #     huo=5.0,
+        #     user_id=user_id,
+        #     room_id=room_id,
+        #     secret_key=self.secret_key,
+        # )
+        # logger.warning("生成的礼品码：{}", gc)
+
+        try:
+            payload_b64, signature = giftcode.split(".", 1)
+
+            payload_bytes = base64.urlsafe_b64decode(
+                payload_b64.encode()
+            )
+
+            expected_sig = hmac.new(
+                self.secret_key,
+                payload_bytes,
+                hashlib.sha256,
+            ).hexdigest()
+
+            if not hmac.compare_digest(signature, expected_sig):
+                raise GiftCodeFormatError("签名错误")
+
+            data = json.loads(payload_bytes.decode())
+
+            required_fields = {
+                "yuan",
+                "huo",
+                "user_id",
+                "room_id",
+                "ts",
+            }
+
+            if not required_fields.issubset(data):
+                raise GiftCodeFormatError("礼品码字段缺失")
+
+        except GiftCodeFormatError:
+            raise
+
+        except Exception as e:
+            raise GiftCodeFormatError("礼品码格式错误") from e
+
+        if data["room_id"] != room_id:
+            raise GiftCodeRedeemError("礼品码房间不匹配")
+
+        if data["user_id"] != user_id:
+            raise GiftCodeRedeemError("礼品码用户不匹配")
+
+        code_hash = hashlib.sha256(
+            giftcode.encode()
+        ).hexdigest()
+
+        with self.Session() as session:
+            try:
+                session.add(
+                    UsedGiftCodeORM(
+                        code_hash=code_hash,
+                        used_at=time.time(),
+                    )
+                )
+
+                user = self._ensure_user(
+                    session,
+                    room_id,
+                    user_id,
+                    user_name,
+                )
+
+                user.yuan += float(data["yuan"])
+                user.huo += float(data["huo"])
+
+                session.commit()
+
+                return {
+                    "room_id": user.room_id,
+                    "user_id": user.user_id,
+                    "user_name": user.user_name,
+                    "yuan": user.yuan,
+                    "huo": user.huo,
+                }
+
+            except IntegrityError as e:
+                session.rollback()
+                raise GiftCodeRedeemError("礼品码已使用") from e

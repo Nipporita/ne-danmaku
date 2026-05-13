@@ -42,7 +42,7 @@ const giftDisplayList = ref([])
 const giftStoreList = ref([])
 
 const maxDisplay = 8
-const TTL = 8000
+const TTL = 80000
 
 /* ===============================
    工具函数

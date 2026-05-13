@@ -38,20 +38,68 @@
     "gift": {
       "default_cost": 1,
       "items": {
-        "good": {
+        "onigiri": {
           "cost": 1,
-          "aliases": ["这个好诶"],
-          "image_url": "/assets/gifts/good.png"
+          "aliases": [
+            "饭团"
+          ],
+          "image_url": "/assets/gifts/饭团.png"
         },
-        "tower": {
+        "dried_fish": {
           "cost": 5,
-          "aliases": ["博雅塔"],
-          "image_url": "/assets/gifts/tower.png"
+          "aliases": [
+            "秘制小鱼干"
+          ],
+          "image_url": "/assets/gifts/秘制小鱼干.png"
         },
-        "eggplant": {
+        "grilled_lamprey": {
+          "cost": 10,
+          "aliases": [
+            "烤八目鳗"
+          ],
+          "image_url": "/assets/gifts/烤八目鳗.png"
+        },
+        "sparrow_sake": {
+          "cost": 20,
+          "aliases": [
+            "雀酒"
+          ],
+          "image_url": "/assets/gifts/雀酒.png"
+        },
+        "star_gazing_pie": {
           "cost": 50,
-          "aliases": ["谢谢茄子"],
-          "image_url": "/assets/gifts/eggplant.png"
+          "aliases": [
+            "仰望星空派"
+          ],
+          "image_url": "/assets/gifts/仰望星空派.png"
+        },
+        "scarlet_devil_cake": {
+          "cost": 100,
+          "aliases": [
+            "猩红恶魔蛋糕"
+          ],
+          "image_url": "/assets/gifts/猩红恶魔蛋糕.png"
+        },
+        "jade_pan_fried_bun": {
+          "cost": 200,
+          "aliases": [
+            "华光玉煎包"
+          ],
+          "image_url": "/assets/gifts/华光玉煎包.png"
+        },
+        "gensokyo_whirlwind": {
+          "cost": 500,
+          "aliases": [
+            "幻想风靡"
+          ],
+          "image_url": "/assets/gifts/幻想风靡.png"
+        },
+        "fourteenth_night": {
+          "cost": 1000,
+          "aliases": [
+            "十四夜"
+          ],
+          "image_url": "/assets/gifts/十四夜.png"
         }
       }
     },
@@ -65,6 +113,7 @@
       "reward_yuan_per_message": 0.0,
       "reward_yuan_interval_seconds": 0,
       "reward_yuan_per_interval": 0.0,
+      "secret_key": "用于加密用户 cookie 的密钥，请修改并不要泄漏",
       "db_path": "cash.db"
     },
     "room_db_path": "room.db",

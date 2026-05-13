@@ -88,6 +88,8 @@ class CashConfig(BaseModel):
     reward_yuan_interval_seconds: int = 0
     reward_yuan_per_interval: float = 0.0
     
+    secret_key: str = "change_this_secret_key"
+    
     db_path: Optional[Path] = None
 
 

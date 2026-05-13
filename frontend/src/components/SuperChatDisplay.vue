@@ -12,7 +12,7 @@
 
                     <div class="sc-header">
                         <strong>{{ sc.user }}</strong>
-                        <span class="amount">{{ sc.amount }} 燕火</span>
+                        <span class="amount">{{ sc.amount }} P点</span>
                     </div>
 
                     <div class="sc-text">

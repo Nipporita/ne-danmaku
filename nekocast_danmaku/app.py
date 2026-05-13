@@ -249,6 +249,7 @@ async def startup_danmaku(app: FastAPI, config: AppConfig) -> None:
         reward_yuan_per_message=max(0.0, cash_cfg.reward_yuan_per_message),
         reward_yuan_interval_seconds=max(0, cash_cfg.reward_yuan_interval_seconds),
         reward_yuan_per_interval=max(0.0, cash_cfg.reward_yuan_per_interval),
+        secret_key=cash_cfg.secret_key.strip()
     )
 
     db_path = cash_cfg.db_path or "cash.db"

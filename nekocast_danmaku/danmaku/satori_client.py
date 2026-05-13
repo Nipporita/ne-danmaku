@@ -23,13 +23,20 @@ from ..config import SatoriConfig
 # Satori 的配置结构
 
 from .models import ConnectionManager
-from .cash_system import RoomCashSystem
+from .cash_system import RoomCashSystem, GiftCodeFormatError, GiftCodeRedeemError
 from .danmaku_class.danmaku_builder import DanmakuBuilder
 from .danmaku_class.danmaku_message import EmoteMessage, GiftMessage, PlainDanmakuMessage, SuperChatMessage
 # ConnectionManager：本地弹幕连接管理器
 # DanmakuMessage：统一的弹幕消息数据结构
 
 from ..emoji.cache import EmojiCache
+
+import re
+# room_id_pattern = "群名查询余额" 如 "弹幕群查询余额"
+ROOM_ID_PATTERN = re.compile(
+    r"^\s*(.+?)\s*查询余额\s*$",
+    re.IGNORECASE,
+)
 
 # =========================
 # 全局状态（确保只启动一个客户端）
@@ -85,6 +92,40 @@ async def start_satori_client(
     @client.register_on(EventType.MESSAGE_CREATED)
     async def handle_message(account: Account, event: MessageEvent):
         # 收到一条新消息（弹幕）
+        
+        # 可能是查询余额
+        m = ROOM_ID_PATTERN.match(event.message.content)
+        if m:
+            userid = event.user.id
+            danmaku_channel = m.group(1).strip()
+            if danmaku_channel in config.group_map.values():
+                cash_user_id = str(userid) or f"name:{event.user.name}"
+                balance = room_cash_system.get_balance(room_id=danmaku_channel, user_id=cash_user_id, user_name=str(event.user.name))
+                if balance is None:
+                    logger.warning(
+                        "查询余额失败，频道: {}, 用户 {}-{} 不在系统中",
+                        danmaku_channel,
+                        userid,
+                        event.user.name,
+                    )
+                    await account.send_message(
+                        event.channel.id,
+                        f"你在 {danmaku_channel} 的余额是 0 弹货，0 P点",
+                    )
+                else:
+                    logger.info(
+                        "用户 {}-{} 查询余额，频道: {}, 余额: {} 元, {} 火",
+                        userid,
+                        event.user.name,
+                        danmaku_channel,
+                        balance[0],
+                        balance[1],
+                    )
+                    await account.send_message(
+                        event.channel.id,
+                        f"你在 {danmaku_channel} 的余额是 {balance[0]} 弹货，{balance[1]} P点",
+                    )
+            return
 
         # 如果该频道未在配置的 group_map 中，直接忽略
         if event.channel.id not in config.group_map:
@@ -151,7 +192,53 @@ async def start_satori_client(
                 username,
                 danmaku,
             )
+            
+        if isinstance(danmaku, PlainDanmakuMessage):
+            # 检查是否是礼品码
+            key = danmaku.text.strip()
+            try:
+                after_charge = room_cash_system.redeem_giftcode(
+                    room_id=danmaku_channel,
+                    user_id=cash_user_id,
+                    user_name=username,
+                    giftcode=key,
+                )
+            except GiftCodeFormatError:
+                # 不是礼品码
+                # 当普通弹幕处理
+                
+                logger.debug(
+                    "普通弹幕，频道: {}, 用户: {}-{}, 内容: {}",
+                    danmaku_channel,
+                    userid,
+                    username,
+                    danmaku.text,
+                )
+                
+                pass
 
+            except GiftCodeRedeemError as e:
+                logger.warning(
+                    "礼品码兑换失败，频道: {}, 用户: {}-{}, 礼品码: {}, 错误: {}",
+                    danmaku_channel,
+                    userid,
+                    username,
+                    key,
+                    e,
+                )
+                return
+            
+            else:
+                logger.info(
+                    "礼品码兑换成功，频道: {}, 用户: {}-{}, 兑换后余额: {} 元, {} 火",
+                    danmaku_channel,
+                    userid,
+                    username,
+                    after_charge["yuan"],
+                    after_charge["huo"],
+                )
+                return
+                
         if isinstance(danmaku, SuperChatMessage):
             allowed, balance = room_cash_system.spend_huo(
                 room_id=danmaku_channel,

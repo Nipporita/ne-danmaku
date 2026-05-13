@@ -72,7 +72,9 @@ def _duration_from_cost(cost: float) -> int:
 
 
 def _gift_cost(gift_name: str, quantity: int) -> float:
-    unit_cost = _gift_cost_lookup.get(gift_name.strip().lower(), _gift_config.default_cost)
+    unit_cost = _gift_cost_lookup.get(gift_name.strip().lower(), None)
+    if unit_cost is None:
+        return None
     return max(0.0, float(unit_cost)) * float(max(1, quantity))
 
 
@@ -262,10 +264,14 @@ def parse_gift(raw: str):
     gift_name = m.group("gift_name")
     quantity = m.group("quantity")
     parsed_quantity = int(quantity) if quantity is not None else 1
+    cost = _gift_cost(gift_name, parsed_quantity)
+    if cost is None:
+        # 礼物名称不在配置表中，无法确定价格，拒绝解析。
+        return None
     return {
         "gift_name": gift_name,
         "quantity": parsed_quantity,  # 默认 1
-        "cost": _gift_cost(gift_name, parsed_quantity),
+        "cost": cost,
         "image_url": _gift_image(gift_name),
     }
 
