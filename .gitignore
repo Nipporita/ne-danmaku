@@ -8,4 +8,5 @@ node_modules/
 *.db-shm
 *.db-wal
 
-/frontend/public/assets/emoji
+/assets_danmaku/assets/emotes
+/assets_danmaku/emotes

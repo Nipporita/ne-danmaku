@@ -6,7 +6,7 @@ from pathlib import Path
 
 from loguru import logger
 
-EMOTE_EXTENSIONS = {".gif", ".png"}
+EMOTE_EXTENSIONS = {".gif", ".png", ".jpg", ".jpeg"}
 
 
 def scan_emotes(asset_dir: Path) -> dict[str, Path]:

@@ -31,6 +31,9 @@ from .danmaku_class.danmaku_message import EmoteMessage, GiftMessage, PlainDanma
 
 from ..emoji.cache import EmojiCache
 
+from ..emotes.append_emotes import append_emotes
+from pathlib import Path
+
 import re
 # room_id_pattern = "群名查询余额" 如 "弹幕群查询余额"
 ROOM_ID_PATTERN = re.compile(
@@ -92,6 +95,10 @@ async def start_satori_client(
     @client.register_on(EventType.MESSAGE_CREATED)
     async def handle_message(account: Account, event: MessageEvent):
         # 收到一条新消息（弹幕）
+        
+        # 只能shortcut了
+        # path = Path(r"D:\项目\元火\ne-danmaku\assets_danmaku\emotes")
+        # await append_emotes(path, event.message.message)
         
         # 可能是查询余额
         m = ROOM_ID_PATTERN.match(event.message.content)
