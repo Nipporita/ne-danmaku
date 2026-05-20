@@ -19,10 +19,13 @@ from pydantic import BaseModel, model_validator
 from .danmaku_class.danmaku_message import (
     DanmakuMessage,
     EmoteMessage,
+    MultiEmoteMessage,
     GiftMessage,
     PlainDanmakuMessage,
     SuperChatMessage,
 )
+
+from ..emotes.resolver import EmoteResolver
 
 # =========================
 # 上游传输数据包
@@ -299,7 +302,7 @@ class ConnectionManager:
         self,
         danmaku_filter: DanmakuFilter | None = None,
         room_settings_service: RoomSettingsService | None = None,
-        emote_resolver=None,
+        emote_resolver: EmoteResolver | None = None,
     ):
         # 客户端连接：
         # group -> set[WebSocket]
@@ -390,10 +393,10 @@ class ConnectionManager:
             and self.room_settings_service is not None
             and self.room_settings_service.get(group).enable_internal_emoji
         ):
-            emote_url = self.emote_resolver.resolve(message.text)
-            if emote_url is not None:
-                message = EmoteMessage(
-                    emote_url=emote_url,
+            emote_urls = self.emote_resolver.resolve(message.text)
+            if emote_urls is not None:
+                message = MultiEmoteMessage(
+                    emote_urls=emote_urls,
                     senderId=message.senderId,
                     sender=message.sender,
                     is_special=message.is_special,

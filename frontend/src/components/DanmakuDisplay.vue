@@ -68,18 +68,23 @@ function applyRoomSettings(settings) {
 }
 
 function handleEmoji(msg) {
-  const url = resolveEmoteUrl(msg.emote_url)
-  const task = {
-    id: msg.emote_url,
-    resourceKeys: [url],
-    payload: { ...msg, _resolvedUrl: url },
-    onReady: (payload) => {
-      const img = new Image()
-      img.src = payload._resolvedUrl
-      emitEmoji(payload, img)
-    },
+  const urls_raw = msg.emote_urls ?? [msg.emote_url]
+  const urls = urls_raw.map(resolveEmoteUrl).slice(0, 5) // 限制最多5个表情，避免过度占用资源
+
+  for (let i = 0; i < urls.length; i++) {
+    var url = urls[i]
+    const task = {
+      id: `${url}-${new Date().getTime()}-${i}`,
+      resourceKeys: [url],
+      payload: { ...msg, _resolvedUrl: url },
+      onReady: (payload) => {
+        const img = new Image()
+        img.src = payload._resolvedUrl
+        setTimeout(() => emitEmoji(payload, img), 1000 * i)
+      },
+    }
+    assetReadyQueue.enqueue(task)
   }
-  assetReadyQueue.enqueue(task)
 }
 
 function emitEmoji(msg, img) {
@@ -183,7 +188,7 @@ function sendMessage(msg) {
     }
     danmaku.value.emit(payload)
   }
-  else if (type === 'emote') {
+  else if (type === 'emote' || type === 'multi_emote') {
     handleEmoji(msg)
   }
   else if (type === 'superchat') {

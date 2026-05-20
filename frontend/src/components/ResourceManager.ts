@@ -154,7 +154,13 @@ export class AssetReadyQueue {
      */
     enqueue<T>(task: AssetTask<T>) {
         // 防止重复 id
-        if (this.taskMap.has(task.id)) return
+        if (this.taskMap.has(task.id)) {
+            console.warn(
+                "Task with id already exists:",
+                task.id
+            )
+            return
+        }
 
         if (this.queue.length >= this.maxQueueSize) {
             this.queue.shift()

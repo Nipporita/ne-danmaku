@@ -42,6 +42,12 @@ class EmoteMessage(DanmakuBase):
     """表情包消息结构（继承自 DanmakuMessage）"""
     emote_url: str               # 表情包 URL
 
+class MultiEmoteMessage(DanmakuBase):
+    type: Literal["multi_emote"] = "multi_emote"  # 弹幕类型
+    
+    """多表情包消息结构（继承自 DanmakuMessage）"""
+    emote_urls: list[str]       # 多个表情包 URL 列表
+
 # ==========================
 # SuperChat消息结构（不考虑Bilibili）
 # ==========================
