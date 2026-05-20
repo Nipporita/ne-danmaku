@@ -1,7 +1,7 @@
 import re
 from typing import Literal
 
-from satori.element import Element, Text, Image
+from satori.element import Element, Text, Image, Quote
 
 from ...config import GiftConfig, SuperChatConfig
 
@@ -12,6 +12,8 @@ from .danmaku_message import (
     GiftMessage,
     DanmakuMessage,
 )
+
+from loguru import logger
 
 SC_PATTERN = re.compile(r"^/sc(?:\s+(?P<cost>\d+(?:\.\d+)?))?\s+(?P<text>.+)$", re.IGNORECASE)
 SC_PREFIX_PATTERN = re.compile(r"^/sc(?:\s|$)", re.IGNORECASE)
@@ -91,7 +93,7 @@ class DanmakuBuilder:
     @staticmethod
     def classify(
         elements: list[Element],
-    ) -> Literal["plain", "emote", "superchat", "gift"] | None:
+    ) -> Literal["plain", "emote", "superchat", "gift", "Quote"] | None:
         first_element = elements[0] if elements else None
         if isinstance(first_element, Image):
             if len(elements) != 1:
@@ -108,6 +110,9 @@ class DanmakuBuilder:
                 return "gift"
             else:
                 return "plain"
+        elif isinstance(first_element, Quote):
+            # 引用消息不进行特殊解析，直接作为普通弹幕处理，保留原始文本内容。
+            return "Quote"
         else:
             return None
 
@@ -116,6 +121,11 @@ class DanmakuBuilder:
         senderId: str, sender: str, elements: list[Element], avatar_url: str | None
     ) -> DanmakuMessage | None:
         message_type = DanmakuBuilder.classify(elements)
+        
+        while message_type == "Quote":
+            elements = elements[0].children
+            message_type = DanmakuBuilder.classify(elements)
+        
         if message_type is None:
             return None
 
