@@ -139,6 +139,60 @@ def create_router(config: DanmakuConfig) -> APIRouter:
         connection_manager: ConnectionManager = request.app.state.danmaku_manager
         await connection_manager.broadcast_control_message(group, "clear_all")
         return {"ok": True, "group": group, "action": "clear_all"}
+    
+    @router.post("/admin/rooms/append_pattern")
+    async def append_blacklist_pattern(request: Request, pattern: str = Query(...), token: str = Query(None), hard: bool = Query(False)):
+        validate_admin_token(token)
+        connection_manager: ConnectionManager = request.app.state.danmaku_manager
+        if connection_manager.danmaku_filter is None:
+            raise HTTPException(status_code=503, detail="Danmaku filter not available")
+        msg = connection_manager.danmaku_filter.append_pattern(pattern, hard)
+        return {"ok": True, "pattern": pattern, "hard": hard, "message": msg}
+    
+    @router.post("/admin/rooms/remove_pattern")
+    async def remove_blacklist_pattern(request: Request, pattern: str = Query(...), token: str = Query(None), hard: bool = Query(False)):
+        validate_admin_token(token)
+        connection_manager: ConnectionManager = request.app.state.danmaku_manager
+        if connection_manager.danmaku_filter is None:
+            raise HTTPException(status_code=503, detail="Danmaku filter not available")
+        msg = connection_manager.danmaku_filter.remove_pattern(pattern, hard)
+        return {"ok": True, "pattern": pattern, "hard": hard, "message": msg}
+    
+    @router.post("/admin/rooms/ban_user")
+    async def ban_user(request: Request, user_id: str = Query(...), token: str = Query(None)):
+        validate_admin_token(token)
+        connection_manager: ConnectionManager = request.app.state.danmaku_manager
+        if connection_manager.danmaku_filter is None:
+            raise HTTPException(status_code=503, detail="Danmaku filter not available")
+        msg = connection_manager.danmaku_filter.ban_user(user_id)
+        return {"ok": True, "user_id": user_id, "message": msg}
+    
+    @router.post("/admin/rooms/unban_user")
+    async def unban_user(request: Request, user_id: str = Query(...), token: str = Query(None)):
+        validate_admin_token(token)
+        connection_manager: ConnectionManager = request.app.state.danmaku_manager
+        if connection_manager.danmaku_filter is None:
+            raise HTTPException(status_code=503, detail="Danmaku filter not available")
+        msg = connection_manager.danmaku_filter.unban_user(user_id)
+        return {"ok": True, "user_id": user_id, "message": msg}
+    
+    @router.get("/admin/rooms/list_patterns")
+    async def list_blacklist_patterns(request: Request, token: str = Query(None)):
+        validate_admin_token(token)
+        connection_manager: ConnectionManager = request.app.state.danmaku_manager
+        if connection_manager.danmaku_filter is None:
+            raise HTTPException(status_code=503, detail="Danmaku filter not available")
+        patterns = connection_manager.danmaku_filter.list_patterns()
+        return {"ok": True, "patterns": patterns}
+    
+    @router.get("/admin/rooms/list_banned_users")
+    async def list_banned_users(request: Request, token: str = Query(None)):
+        validate_admin_token(token)
+        connection_manager: ConnectionManager = request.app.state.danmaku_manager
+        if connection_manager.danmaku_filter is None:
+            raise HTTPException(status_code=503, detail="Danmaku filter not available")
+        banned_users = connection_manager.danmaku_filter.list_forbidden_users()
+        return {"ok": True, "banned_users": banned_users}
 
     @router.websocket("/upstream")
     async def upstream_websocket(websocket: WebSocket, token: str = Query(None)):

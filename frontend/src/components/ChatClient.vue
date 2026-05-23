@@ -28,6 +28,16 @@ const settingsSaving = ref(false)
 const settingsError = ref('')
 const clearingOverlay = ref(false)
 
+const filteredPatterns = computed(() => {
+  const keyword = patternFilter.value.trim().toLowerCase()
+  if (!keyword)
+    return patterns.value
+
+  return patterns.value.filter(p =>
+    String(p.pattern || '').toLowerCase().includes(keyword),
+  )
+})
+
 // Charge panel state
 const chargeUserId = ref('')
 const chargeCurrency = ref('huo')
@@ -36,6 +46,25 @@ const chargeLoading = ref(false)
 const chargeError = ref('')
 const roomUsers = ref([])
 const roomUsersLoading = ref(false)
+
+// Ban / Pattern panel state
+const moderationPanelOpen = ref(false)
+
+const banUserId = ref('')
+const banHard = ref(false)
+const bannedUsers = ref([])
+const bannedUsersLoading = ref(false)
+
+const patternInput = ref('')
+const patternHard = ref(false)
+const patterns = ref([])
+const patternsLoading = ref(false)
+const patternFilter = ref('')
+
+const patternTestInput = ref('')
+const patternTestResult = ref(null)
+
+const moderationError = ref('')
 
 const roomSettings = ref({
   overlay_opacity: 100,
@@ -306,6 +335,188 @@ function selectUserForCharge(userId) {
   chargeUserId.value = userId
 }
 
+async function fetchBannedUsers() {
+  if (!hasAuthKey.value)
+    return
+
+  bannedUsersLoading.value = true
+
+  try {
+    const resp = await fetch(
+      `/api/danmaku/v1/admin/rooms/list_banned_users?token=${encodeURIComponent(authToken.value)}`,
+    )
+
+    if (!resp.ok)
+      throw new Error(`HTTP ${resp.status}`)
+
+    const data = await resp.json()
+    bannedUsers.value = data.banned_users || []
+  }
+  catch (e) {
+    moderationError.value = `获取封禁列表失败: ${e.message}`
+  }
+  finally {
+    bannedUsersLoading.value = false
+  }
+}
+
+async function fetchPatterns() {
+  if (!hasAuthKey.value)
+    return
+
+  patternsLoading.value = true
+
+  try {
+    const resp = await fetch(
+      `/api/danmaku/v1/admin/rooms/list_patterns?token=${encodeURIComponent(authToken.value)}`,
+    )
+
+    if (!resp.ok)
+      throw new Error(`HTTP ${resp.status}`)
+
+    const data = await resp.json()
+    patterns.value = data.patterns || []
+  }
+  catch (e) {
+    moderationError.value = `获取 Pattern 列表失败: ${e.message}`
+  }
+  finally {
+    patternsLoading.value = false
+  }
+}
+
+async function addBanUser() {
+  if (!banUserId.value.trim())
+    return
+
+  moderationError.value = ''
+
+  try {
+    const resp = await fetch(
+      `/api/danmaku/v1/admin/rooms/ban_user?user_id=${encodeURIComponent(banUserId.value.trim())}&hard=${banHard.value}&token=${encodeURIComponent(authToken.value)}`,
+      { method: 'POST' },
+    )
+
+    if (!resp.ok)
+      throw new Error(`HTTP ${resp.status}`)
+
+    await fetchBannedUsers()
+
+    showMessage({
+      text: `已封禁用户 ${banUserId.value}`,
+      source: 'system',
+    })
+
+    banUserId.value = ''
+  }
+  catch (e) {
+    moderationError.value = `封禁失败: ${e.message}`
+  }
+}
+
+async function unbanUser(userId) {
+  moderationError.value = ''
+
+  try {
+    const resp = await fetch(
+      `/api/danmaku/v1/admin/rooms/unban_user?user_id=${encodeURIComponent(userId)}&token=${encodeURIComponent(authToken.value)}`,
+      { method: 'POST' },
+    )
+
+    if (!resp.ok)
+      throw new Error(`HTTP ${resp.status}`)
+
+    await fetchBannedUsers()
+
+    showMessage({
+      text: `已解除封禁 ${userId}`,
+      source: 'system',
+    })
+  }
+  catch (e) {
+    moderationError.value = `解除封禁失败: ${e.message}`
+  }
+}
+
+async function addPattern() {
+  if (!patternInput.value.trim())
+    return
+
+  moderationError.value = ''
+
+  try {
+    const resp = await fetch(
+      `/api/danmaku/v1/admin/rooms/append_pattern?pattern=${encodeURIComponent(patternInput.value)}&hard=${patternHard.value}&token=${encodeURIComponent(authToken.value)}`,
+      { method: 'POST' },
+    )
+
+    if (!resp.ok)
+      throw new Error(`HTTP ${resp.status}`)
+
+    await fetchPatterns()
+
+    showMessage({
+      text: `Pattern 已添加`,
+      source: 'system',
+    })
+
+    patternInput.value = ''
+  }
+  catch (e) {
+    moderationError.value = `添加 Pattern 失败: ${e.message}`
+  }
+}
+
+async function removePattern(pattern) {
+  moderationError.value = ''
+
+  try {
+    const resp = await fetch(
+      `/api/danmaku/v1/admin/rooms/remove_pattern?pattern=${encodeURIComponent(pattern)}&token=${encodeURIComponent(authToken.value)}`,
+      { method: 'POST' },
+    )
+
+    if (!resp.ok)
+      throw new Error(`HTTP ${resp.status}`)
+
+    await fetchPatterns()
+
+    showMessage({
+      text: `Pattern 已删除`,
+      source: 'system',
+    })
+  }
+  catch (e) {
+    moderationError.value = `删除 Pattern 失败: ${e.message}`
+  }
+}
+
+function testPattern() {
+  patternTestResult.value = null
+
+  if (!patternInput.value)
+    return
+
+  try {
+    const regex = new RegExp(patternInput.value, 'i')
+    patternTestResult.value = regex.test(patternTestInput.value)
+  }
+  catch {
+    patternTestResult.value = 'invalid'
+  }
+}
+
+function quickBanFromMessage(message, hard = false) {
+  const userId = message?.sender
+
+  if (!userId)
+    return
+
+  banUserId.value = userId
+  banHard.value = hard
+  addBanUser()
+}
+
 function connectClientWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://'
   const wsUrl = `${protocol}${window.location.host}/api/danmaku/v1/danmaku/${props.roomId}`
@@ -352,6 +563,8 @@ function connectUpstreamWebSocket() {
     checkConnectionStatus()
     fetchSettings()
     fetchRoomUsers()
+    fetchBannedUsers()
+    fetchPatterns()
   }
   upstreamSocket.value.onmessage = (event) => {
     const data = JSON.parse(event.data)
@@ -463,6 +676,14 @@ onUnmounted(() => {
           <span v-if="message.source" class="message-tag" :class="message.source">
             {{ message.source === 'client' ? '客户端' : message.source === 'upstream' ? '上游' : '系统' }}
           </span>
+          <div v-if="hasAuthKey && message.sender" class="message-actions">
+            <button class="small-btn" @click="quickBanFromMessage(message, false)">
+              Ban
+            </button>
+            <button class="small-btn danger-mini-btn" @click="quickBanFromMessage(message, true)">
+              Hard Ban
+            </button>
+          </div>
         </header>
         <p class="message-text">{{ formatMessageText(message) }}</p>
 
@@ -488,7 +709,8 @@ onUnmounted(() => {
         <input v-model.number="roomSettings.overlay_opacity" type="range" min="0" max="100">
         <span class="slider-value">{{ Math.round(roomSettings.overlay_opacity) }}%</span>
       </label>
-      <label class="toggle-item"><input v-model="roomSettings.enable_external_emoji" type="checkbox">启用外部 Emoji（Satori/OneBot）</label>
+      <label class="toggle-item"><input v-model="roomSettings.enable_external_emoji" type="checkbox">启用外部
+        Emoji（Satori/OneBot）</label>
       <label class="toggle-item"><input v-model="roomSettings.enable_internal_emoji" type="checkbox">启用内部表情（【表情】）</label>
       <label class="toggle-item"><input v-model="roomSettings.enable_superchat" type="checkbox">启用 SuperChat</label>
       <label class="toggle-item"><input v-model="roomSettings.enable_gift" type="checkbox">启用礼物</label>
@@ -514,12 +736,8 @@ onUnmounted(() => {
         </div>
         <div v-if="roomUsers.length === 0" class="empty-list-hint">暂无用户数据</div>
         <div v-else class="user-list-scroll">
-          <div
-            v-for="u in roomUsers" :key="u.user_id"
-            class="user-list-item"
-            :class="{ selected: chargeUserId === u.user_id }"
-            @click="selectUserForCharge(u.user_id)"
-          >
+          <div v-for="u in roomUsers" :key="u.user_id" class="user-list-item"
+            :class="{ selected: chargeUserId === u.user_id }" @click="selectUserForCharge(u.user_id)">
             <span class="user-name">{{ u.user_name }}</span>
             <span class="user-id-tag">{{ u.user_id }}</span>
             <span class="user-balance">元{{ u.yuan.toFixed(1) }} / 火{{ u.huo.toFixed(1) }}</span>
@@ -544,19 +762,161 @@ onUnmounted(() => {
       <div v-if="chargeError" class="error-text">{{ chargeError }}</div>
     </section>
 
+    <section v-if="hasAuthKey" class="moderation-panel">
+      <div class="panel-title moderation-title">
+        <span>弹幕过滤 / 封禁管理</span>
+
+        <button class="primary-btn" @click="moderationPanelOpen = true">
+          打开管理面板
+        </button>
+      </div>
+    </section>
+
+    <div v-if="moderationPanelOpen" class="moderation-modal-mask" @click.self="moderationPanelOpen = false">
+      <div class="moderation-modal">
+        <div class="moderation-modal-header">
+          <div class="panel-title">
+            弹幕过滤 / 封禁管理
+          </div>
+
+          <button class="small-btn" @click="moderationPanelOpen = false">
+            关闭
+          </button>
+        </div>
+
+        <div class="moderation-modal-body">
+          <div class="moderation-grid">
+            <div class="moderation-card">
+              <div class="sub-title">添加封禁用户</div>
+
+              <div class="inline-form">
+                <input v-model="banUserId" class="text-input" type="text" placeholder="用户 ID">
+
+                <label class="toggle-item">
+                  <input v-model="banHard" type="checkbox">
+                  Hard
+                </label>
+
+                <button class="danger-btn" @click="addBanUser">
+                  Ban
+                </button>
+              </div>
+
+              <div class="sub-title row-title">
+                <span>已封禁用户</span>
+
+                <button class="small-btn" :disabled="bannedUsersLoading" @click="fetchBannedUsers">
+                  {{ bannedUsersLoading ? '刷新中' : '刷新' }}
+                </button>
+              </div>
+
+              <div class="user-list-scroll modal-scroll">
+                <div v-for="u in bannedUsers" :key="u.user_id" class="user-list-item">
+                  <div class="ban-user-info">
+                    <span class="user-name">{{ u.user_id }}</span>
+
+                    <div class="ban-user-tags">
+                      <span class="mini-tag" :class="u.in_memory ? 'tag-green' : 'tag-red'">
+                        memory
+                      </span>
+
+                      <span class="mini-tag" :class="u.in_file ? 'tag-green' : 'tag-red'">
+                        file
+                      </span>
+                    </div>
+                  </div>
+
+                  <button class="small-btn" @click="unbanUser(u.user_id)">
+                    Unban
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="moderation-card">
+              <div class="sub-title">Pattern 管理</div>
+
+              <div class="inline-form">
+                <input v-model="patternInput" class="text-input" type="text" placeholder="正则表达式">
+
+                <label class="toggle-item">
+                  <input v-model="patternHard" type="checkbox">
+                  Hard
+                </label>
+
+                <button class="primary-btn" @click="addPattern">
+                  添加
+                </button>
+              </div>
+
+              <div class="inline-form">
+                <input v-model="patternTestInput" class="text-input" type="text" placeholder="测试字符串">
+
+                <button class="small-btn" @click="testPattern">
+                  测试
+                </button>
+
+                <span v-if="patternTestResult !== null" class="test-result">
+                  {{
+                    patternTestResult === 'invalid'
+                    ? '正则非法'
+                    : patternTestResult
+                      ? '匹配成功'
+                      : '未匹配'
+                  }}
+                </span>
+              </div>
+
+              <div class="inline-form">
+                <input v-model="patternFilter" class="text-input" type="text" placeholder="筛选 Pattern">
+
+                <button class="small-btn" :disabled="patternsLoading" @click="fetchPatterns">
+                  {{ patternsLoading ? '刷新中' : '刷新' }}
+                </button>
+              </div>
+
+              <div class="pattern-scroll modal-scroll">
+                <div v-for="p in filteredPatterns" :key="p.pattern" class="pattern-item">
+                  <div class="pattern-info">
+                    <code>{{ p.pattern }}</code>
+
+                    <div class="pattern-tags">
+                      <span class="mini-tag" :class="p.correct ? 'tag-green' : 'tag-red'">
+                        {{ p.correct ? 'valid' : 'invalid' }}
+                      </span>
+
+                      <span class="mini-tag" :class="p.in_memory ? 'tag-green' : 'tag-red'">
+                        memory
+                      </span>
+
+                      <span class="mini-tag" :class="p.in_file ? 'tag-green' : 'tag-red'">
+                        file
+                      </span>
+                    </div>
+                  </div>
+
+                  <button class="small-btn" @click="removePattern(p.pattern)">
+                    删除
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="moderationError" class="error-text">
+            {{ moderationError }}
+          </div>
+        </div>
+      </div>
+    </div>
+
     <section class="composer">
       <div class="auth-hint" :class="{ ready: hasAuthKey }">
         {{ hasAuthKey ? 'URL key 已加载' : '缺少 URL key，无法连接上游' }}
       </div>
       <input v-model="senderName" class="text-input" type="text" placeholder="输入昵称...">
-      <input
-        v-model="inputValue"
-        class="text-input"
-        type="text"
-        :maxlength="MAX_MESSAGE_LENGTH"
-        placeholder="输入弹幕..."
-        @keydown.enter="sendMessage"
-      >
+      <input v-model="inputValue" class="text-input" type="text" :maxlength="MAX_MESSAGE_LENGTH" placeholder="输入弹幕..."
+        @keydown.enter="sendMessage">
       <button class="primary-btn" :disabled="!canSend" @click="sendMessage">
         发送数据包
       </button>
@@ -979,5 +1339,183 @@ onUnmounted(() => {
 .warn-btn:not(:disabled):hover {
   transform: translateY(-1px);
   box-shadow: 0 12px 30px rgba(245, 158, 11, 0.35);
+}
+
+.message-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.danger-mini-btn {
+  background: rgba(220, 38, 38, 0.2);
+  color: #fca5a5;
+}
+
+.moderation-panel {
+  padding: 18px 20px;
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.moderation-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.moderation-grid {
+  flex: 1;
+
+  min-height: 0;
+
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+
+  overflow: hidden;
+}
+
+.sub-title {
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.inline-form {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.pattern-scroll {
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pattern-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.4);
+}
+
+.pattern-item code {
+  color: #93c5fd;
+  word-break: break-all;
+}
+
+.test-result {
+  color: #cbd5f5;
+  font-size: 0.9rem;
+}
+
+.row-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.pattern-info,
+.ban-user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pattern-tags,
+.ban-user-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mini-tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
+.tag-green {
+  background: rgba(34, 197, 94, 0.18);
+  color: #86efac;
+}
+
+.tag-red {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fca5a5;
+}
+
+.moderation-modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.75);
+  backdrop-filter: blur(8px);
+  z-index: 2000;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 24px;
+}
+
+.moderation-modal {
+  width: min(1200px, 92vw);
+  height: min(820px, 88vh);
+
+  display: flex;
+  flex-direction: column;
+
+  overflow: hidden;
+}
+
+.moderation-modal-header {
+  padding: 18px 22px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.moderation-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.modal-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.moderation-card {
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+
+  display: flex;
+  flex-direction: column;
+
+  min-height: 0;
+}
+
+.moderation-modal-body {
+  flex: 1;
+  min-height: 0;
+
+  overflow: hidden;
+
+  padding: 16px;
 }
 </style>

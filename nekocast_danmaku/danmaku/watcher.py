@@ -58,3 +58,4 @@ def start_blacklist_watcher(
     logger.info("Started blacklist watcher")
     
     service.watchdog = observer
+    service.handler = handler

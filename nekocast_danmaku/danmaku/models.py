@@ -100,11 +100,17 @@ class BlacklistService:
     def __init__(self):
         # 已编译的正则
         self._patterns: list[regex.Pattern] = []
+        self._pattern_strings: set[str] = set()  # 用于快速检查是否已存在某个模式字符串
+        
+        self._pattern_in_file: list[str] = []  # 维护一个原始字符串列表，保持与文件一致的顺序（用于持久化）
 
         # 禁止用户 ID
         self._forbidden_users: set[str] = set()
+        self._forbidden_users_in_file: list[str] = []  # 维护一个原始用户 ID 列表，保持与文件一致的顺序（用于持久化）
 
         self.watchdog: Any = None  # 文件监视器（外部设置）
+        
+        self.handler: Any = None  # Watchdog 事件处理器（外部设置）
 
     # =========================
     # 加载 / 重载
@@ -121,15 +127,192 @@ class BlacklistService:
                 logger.error("Invalid blacklist regex '{}': {}", pat, exc)
 
         self._patterns = compiled
+        self._pattern_strings = set(pat.pattern for pat in compiled)
+        self._pattern_in_file = patterns  # 保持原始字符串列表
         logger.info("Loaded {} blacklist regex patterns", len(compiled))
 
     def load_users(self, path: Path) -> None:
         self._forbidden_users = set(self._load_lines(path))
+        self._forbidden_users_in_file = list(self._forbidden_users)  # 保持原始用户 ID 列表
         logger.info("Loaded {} forbidden users", len(self._forbidden_users))
 
     def reload(self, pattern_path: Path, user_path: Path) -> None:
         self.load_patterns(pattern_path)
         self.load_users(user_path)
+    
+    def append_pattern(self, pattern: str, hard: bool = False) -> str:
+        """动态追加一个黑名单正则模式"""
+        if not hard:
+            try:
+                compiled = regex.compile(pattern, regex.IGNORECASE)
+                self._patterns.append(compiled)
+                self._pattern_strings.add(compiled.pattern)
+                logger.info("Appended new blacklist pattern: {}", pattern)
+                return f"Appended new blacklist pattern: {pattern}"
+            except regex.error as exc:
+                logger.error("Invalid regex pattern '{}': {}", pattern, exc)
+                return f"Invalid regex pattern: {pattern}"
+        else:
+            # 直接追加到文件并重载（持久化）
+            if self.watchdog and self.handler:
+                pattern_path = self.handler.pattern_file
+                try:
+                    with open(pattern_path, "a", encoding="utf-8") as f:
+                        f.write("\n" + pattern)
+                    logger.info("Appended new blacklist pattern to file: {}", pattern)
+                    return f"Appended new blacklist pattern to file: {pattern}"
+                except Exception as exc:
+                    logger.error("Failed to append pattern to file '{}': {}", pattern_path, exc)
+                    return f"Failed to append pattern to file: {exc}"
+            else:
+                logger.warning("Cannot append pattern to file because watchdog is not set up")
+                return "Cannot append pattern to file because watchdog is not set up, use append_pattern with hard=False instead\n" \
+                    + self.append_pattern(pattern, hard=False)
+    
+    def remove_pattern(self, pattern: str, hard: bool = False) -> str:
+        """动态移除一个黑名单正则模式"""
+        if not hard:
+            compiled = regex.compile(pattern, regex.IGNORECASE)
+            before_count = len(self._patterns)
+            self._patterns = [pat for pat in self._patterns if pat.pattern != compiled.pattern]
+            self._pattern_strings.discard(compiled.pattern)
+            after_count = len(self._patterns)
+            logger.info("Removed blacklist pattern: {}, {} patterns remain", pattern, after_count)
+            return f"Removed blacklist pattern: {pattern}, {after_count} patterns remain"
+        else:
+            # 从文件中移除并重载（持久化）
+            if self.watchdog and self.handler:
+                pattern_path = self.handler.pattern_file
+                try:
+                    lines = self._load_lines(pattern_path)
+                    lines = [line for line in lines if line.strip() != pattern]
+                    with open(pattern_path, "w", encoding="utf-8") as f:
+                        f.write("\n".join(lines) + "\n")
+                    logger.info("Removed blacklist pattern from file: {}, {} patterns remain", pattern, len(self._patterns))
+                    return f"Removed blacklist pattern from file: {pattern}, {len(self._patterns)} patterns remain"
+                except Exception as exc:
+                    logger.error("Failed to remove pattern from file '{}': {}", pattern_path, exc)
+                    return f"Failed to remove pattern from file: {exc}"
+            else:
+                logger.warning("Cannot remove pattern from file because watchdog is not set up")
+                return "Cannot remove pattern from file because watchdog is not set up, use remove_pattern with hard=False instead\n" \
+                    + self.remove_pattern(pattern, hard=False)
+    
+    def ban_user(self, user_id: str, hard: bool = False) -> str:
+        """动态禁止一个用户 ID"""
+        if not hard:
+            self._forbidden_users.add(user_id)
+            logger.info("Banned user ID: {}", user_id)
+            return f"Banned user ID: {user_id}"
+        else:
+            # 直接追加到文件并重载（持久化）
+            if self.watchdog and self.handler:
+                user_path = self.handler.user_file
+                try:
+                    with open(user_path, "a", encoding="utf-8") as f:
+                        f.write(user_id + "\n")
+                    logger.info("Banned user ID by appending to file: {}", user_id)
+                    return f"Banned user ID by appending to file: {user_id}"
+                except Exception as exc:
+                    logger.error("Failed to ban user ID by appending to file '{}': {}", user_path, exc)
+                    return f"Failed to ban user ID by appending to file: {exc}"
+            else:
+                logger.warning("Cannot ban user ID by appending to file because watchdog is not set up")
+                return "Cannot ban user ID by appending to file because watchdog is not set up, use ban_user with hard=False instead\n" \
+                    + self.ban_user(user_id, hard=False)
+    
+    def unban_user(self, user_id: str, hard: bool = False) -> str:
+        """动态解除禁止一个用户 ID"""
+        if not hard:
+            self._forbidden_users.discard(user_id)
+            logger.info("Unbanned user ID: {}", user_id)
+            return f"Unbanned user ID: {user_id}"
+        else:
+            # 从文件中移除并重载（持久化）
+            if self.watchdog and self.handler:
+                user_path = self.handler.user_file
+                try:
+                    lines = self._load_lines(user_path)
+                    lines = [line for line in lines if line.strip() != user_id]
+                    with open(user_path, "w", encoding="utf-8") as f:
+                        f.write("\n".join(lines) + "\n")
+                    logger.info("Unbanned user ID by removing from file: {}", user_id)
+                    return f"Unbanned user ID by removing from file: {user_id}"
+                except Exception as exc:
+                    logger.error("Failed to unban user ID by removing from file '{}': {}", user_path, exc)
+                    return f"Failed to unban user ID by removing from file: {exc}"
+            else:
+                logger.warning("Cannot unban user ID by removing from file because watchdog is not set up")
+                return "Cannot unban user ID by removing from file because watchdog is not set up, use unban_user with hard=False instead\n" \
+                + self.unban_user(user_id, hard=False)
+    
+    def list_patterns(self) -> list[dict[str, Any]]:
+        """列出当前的黑名单正则模式"""
+        """
+        [
+            {
+                "pattern": "badword",
+                "correct": bool (能否编译),
+                "in_file": bool (是否在文件中),
+                "in_memory": bool (是否在内存中),
+            }
+        ]
+        """
+        result_dict = {}
+        for pat in self._pattern_strings:
+            result_dict[pat] = {
+                "pattern": pat,
+                "correct": True,
+                "in_file": pat in self._pattern_in_file,
+                "in_memory": True,
+            }
+        
+        for pat in self._pattern_in_file:
+            if pat not in result_dict:
+                correct = True
+                try:
+                    regex.compile(pat, regex.IGNORECASE)
+                except regex.error:
+                    correct = False
+                    
+                result_dict[pat] = {
+                    "pattern": pat,
+                    "correct": correct,
+                    "in_file": True,
+                    "in_memory": False,
+                }
+        
+        return list(result_dict.values())
+    
+    def list_forbidden_users(self) -> list[dict[str, Any]]:
+        """列出当前的禁止用户 ID"""
+        """
+        [
+            {
+                "user_id": "123456",
+                "in_file": bool (是否在文件中),
+                "in_memory": bool (是否在内存中),
+            }
+        ]
+        """
+        result_dict = {}
+        for user_id in self._forbidden_users:
+            result_dict[user_id] = {
+                "user_id": user_id,
+                "in_file": user_id in self._forbidden_users_in_file,
+                "in_memory": True,
+            }
+        
+        for user_id in self._forbidden_users_in_file:
+            if user_id not in result_dict:
+                result_dict[user_id] = {
+                    "user_id": user_id,
+                    "in_file": True,
+                    "in_memory": False,
+                }
+        
+        return list(result_dict.values())
+        
 
     # =========================
     # 判定（核心）
@@ -244,6 +427,54 @@ class DanmakuFilter:
         self.recent_messages: dict[str, deque] = defaultdict(deque)
 
         self.blacklist: BlacklistService | None = blacklist
+    
+    def append_pattern(self, text: str, hard: bool = False) -> str:
+        """动态追加一个黑名单正则模式"""
+        if self.blacklist:
+            return self.blacklist.append_pattern(text, hard=hard)
+        else:
+            logger.warning("Cannot append blacklist pattern because blacklist service is not set up")
+            return "Cannot append blacklist pattern because blacklist service is not set up"
+    
+    def remove_pattern(self, text: str, hard: bool = False) -> str:
+        """动态移除一个黑名单正则模式"""
+        if self.blacklist:
+            return self.blacklist.remove_pattern(text, hard=hard)
+        else:
+            logger.warning("Cannot remove blacklist pattern because blacklist service is not set up")
+            return "Cannot remove blacklist pattern because blacklist service is not set up"
+    
+    def ban_user(self, user_id: str, hard: bool = False) -> str:
+        """动态禁止一个用户 ID"""
+        if self.blacklist:
+            return self.blacklist.ban_user(user_id, hard=hard)
+        else:
+            logger.warning("Cannot ban user ID because blacklist service is not set up")
+            return "Cannot ban user ID because blacklist service is not set up"
+    
+    def unban_user(self, user_id: str, hard: bool = False) -> str:
+        """动态解除禁止一个用户 ID"""
+        if self.blacklist:
+            return self.blacklist.unban_user(user_id, hard=hard)
+        else:
+            logger.warning("Cannot unban user ID because blacklist service is not set up")
+            return "Cannot unban user ID because blacklist service is not set up"
+    
+    def list_patterns(self) -> list[dict[str, Any]]:
+        """列出当前的黑名单正则模式"""
+        if self.blacklist:
+            return self.blacklist.list_patterns()
+        else:
+            logger.warning("Cannot list blacklist patterns because blacklist service is not set up")
+            return []
+    
+    def list_forbidden_users(self) -> list[dict[str, Any]]:
+        """列出当前的禁止用户 ID"""
+        if self.blacklist:
+            return self.blacklist.list_forbidden_users()
+        else:
+            logger.warning("Cannot list forbidden users because blacklist service is not set up")
+            return []
 
     def should_filter(self, group: str, message: DanmakuMessage) -> bool:
         """判断一条弹幕是否应该被过滤"""
