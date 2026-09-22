@@ -79,11 +79,16 @@ def run_asgi(
 ) -> None:
     """Synchronous entrypoint for serving one ASGI app."""
 
-    asyncio.run(
-        serve_asgi(
-            app,
-            host=host,
-            port=port,
-            log_level=log_level,
+    try:
+        asyncio.run(
+            serve_asgi(
+                app,
+                host=host,
+                port=port,
+                log_level=log_level,
+            )
         )
-    )
+    except KeyboardInterrupt:
+        # Ctrl+C 已在 serve_asgi 内触发优雅关停（_capture_signals 重抛的信号），
+        # 这里静默退出，避免 asyncio.run 再打印 CancelledError/KeyboardInterrupt 噪音
+        pass
