@@ -69,6 +69,14 @@ class EmojiCache:
                 for k, _ in sorted_items[:len(self.store)-MAX_CACHE_SIZE]:
                     del self.store[k]
 
+            # 清理无活跃下载的用户信号量（避免 user_sems 内存泄漏）
+            idle_users = [
+                u for u, sem in self.user_sems.items()
+                if not sem.locked()
+            ]
+            for u in idle_users:
+                del self.user_sems[u]
+
             await asyncio.sleep(30)
 
     def import_emoji_sync(

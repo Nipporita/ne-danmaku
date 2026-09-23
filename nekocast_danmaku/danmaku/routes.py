@@ -42,11 +42,27 @@ def create_router(config: DanmakuConfig) -> APIRouter:
         """弹幕服务健康检查接口"""
         return {"message": "弹幕服务运行中", "version": "0.1.0"}
 
+    @router.get("/config")
+    async def public_config(request: Request):
+        """无需鉴权的公开配置（供前端读取）"""
+        return {
+            "max_message_length": config.max_message_length,
+            "config_version": getattr(request.app.state, "config_reload_counter", 0),
+        }
+
     def validate_admin_token(token: str | None):
         if not token:
             raise HTTPException(status_code=401, detail="Missing admin token")
         if not config.upstream or not compare_digest(token.strip(), config.upstream.token):
             raise HTTPException(status_code=403, detail="Invalid admin token")
+
+    def _get_blacklist(connection_manager: "ConnectionManager"):
+        """Get the BlacklistService from the connection manager, or raise 503."""
+        if connection_manager.danmaku_filter is None:
+            raise HTTPException(status_code=503, detail="Danmaku filter not available")
+        if connection_manager.danmaku_filter.blacklist is None:
+            raise HTTPException(status_code=503, detail="Blacklist service not available")
+        return connection_manager.danmaku_filter.blacklist
 
     @router.get("/balance")
     async def query_balance_by_name(request: Request, username: str = Query(..., min_length=1)):
@@ -116,7 +132,8 @@ def create_router(config: DanmakuConfig) -> APIRouter:
     async def get_room_settings(request: Request, group: str, token: str = Query(None)):
         validate_admin_token(token)
         connection_manager: ConnectionManager = request.app.state.danmaku_manager
-        assert connection_manager.room_settings_service is not None
+        if connection_manager.room_settings_service is None:
+            raise HTTPException(status_code=503, detail="Room settings service not available")
         return connection_manager.room_settings_service.get(group).model_dump()
 
     @router.put("/admin/rooms/{group}/settings")
@@ -128,7 +145,8 @@ def create_router(config: DanmakuConfig) -> APIRouter:
     ):
         validate_admin_token(token)
         connection_manager: ConnectionManager = request.app.state.danmaku_manager
-        assert connection_manager.room_settings_service is not None
+        if connection_manager.room_settings_service is None:
+            raise HTTPException(status_code=503, detail="Room settings service not available")
         updated = connection_manager.room_settings_service.update(group, settings)
         await connection_manager.broadcast_room_settings(group)
         return updated.model_dump()
@@ -140,58 +158,102 @@ def create_router(config: DanmakuConfig) -> APIRouter:
         await connection_manager.broadcast_control_message(group, "clear_all")
         return {"ok": True, "group": group, "action": "clear_all"}
     
+    # ── 运行时配置管理 ──────────────────────────
+
+    @router.get("/admin/config")
+    async def get_runtime_config(request: Request, token: str = Query(None)):
+        """查看当前运行中的配置（脱敏，排除 upstream.token 等敏感字段）"""
+        validate_admin_token(token)
+        dc = request.app.state.config.danmaku
+        data = dc.model_dump(exclude_none=True)
+        # 脱敏
+        if "upstream" in data and data["upstream"] is not None:
+            data["upstream"]["token"] = "***"
+        if "satori" in data and data["satori"] is not None and "token" in data["satori"]:
+            data["satori"]["token"] = "***"
+        if "bilibili" in data and data["bilibili"] is not None and "sess_data" in data["bilibili"]:
+            data["bilibili"]["sess_data"] = "***"
+        if "cash" in data and data["cash"] is not None and "secret_key" in data["cash"]:
+            data["cash"]["secret_key"] = "***"
+        data["config_version"] = getattr(request.app.state, "config_reload_counter", 0)
+        return data
+
+    @router.put("/admin/config")
+    async def update_runtime_config(
+        request: Request,
+        token: str = Query(None),
+        persist: bool = Query(False),
+    ):
+        """运行时更新可热加载的配置字段。
+
+        请求体为 JSON 对象，key 为字段的 dotted path（如 ``"max_message_length"``，
+        ``"superchat"``，``"cash.initial_huo"``）。只接受可热加载字段。
+        设置 ``?persist=true`` 可同时写回 config.json。
+        """
+        validate_admin_token(token)
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Request body must be valid JSON")
+
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+
+        reloader = getattr(request.app.state, "config_reloader", None)
+        if reloader is None:
+            raise HTTPException(status_code=503, detail="Config reloader not available")
+
+        result = reloader.apply_updates(body, persist=persist)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
+        return result
+
     @router.post("/admin/rooms/append_pattern")
     async def append_blacklist_pattern(request: Request, pattern: str = Query(...), token: str = Query(None), hard: bool = Query(False)):
         validate_admin_token(token)
         connection_manager: ConnectionManager = request.app.state.danmaku_manager
-        if connection_manager.danmaku_filter is None:
-            raise HTTPException(status_code=503, detail="Danmaku filter not available")
-        msg = connection_manager.danmaku_filter.append_pattern(pattern, hard)
+        bl = _get_blacklist(connection_manager)
+        msg = bl.append_pattern(pattern, hard)
         return {"ok": True, "pattern": pattern, "hard": hard, "message": msg}
-    
+
     @router.post("/admin/rooms/remove_pattern")
     async def remove_blacklist_pattern(request: Request, pattern: str = Query(...), token: str = Query(None), hard: bool = Query(False)):
         validate_admin_token(token)
         connection_manager: ConnectionManager = request.app.state.danmaku_manager
-        if connection_manager.danmaku_filter is None:
-            raise HTTPException(status_code=503, detail="Danmaku filter not available")
-        msg = connection_manager.danmaku_filter.remove_pattern(pattern, hard)
+        bl = _get_blacklist(connection_manager)
+        msg = bl.remove_pattern(pattern, hard)
         return {"ok": True, "pattern": pattern, "hard": hard, "message": msg}
-    
+
     @router.post("/admin/rooms/ban_user")
     async def ban_user(request: Request, user_id: str = Query(...), token: str = Query(None)):
         validate_admin_token(token)
         connection_manager: ConnectionManager = request.app.state.danmaku_manager
-        if connection_manager.danmaku_filter is None:
-            raise HTTPException(status_code=503, detail="Danmaku filter not available")
-        msg = connection_manager.danmaku_filter.ban_user(user_id)
+        bl = _get_blacklist(connection_manager)
+        msg = bl.ban_user(user_id)
         return {"ok": True, "user_id": user_id, "message": msg}
-    
+
     @router.post("/admin/rooms/unban_user")
     async def unban_user(request: Request, user_id: str = Query(...), token: str = Query(None)):
         validate_admin_token(token)
         connection_manager: ConnectionManager = request.app.state.danmaku_manager
-        if connection_manager.danmaku_filter is None:
-            raise HTTPException(status_code=503, detail="Danmaku filter not available")
-        msg = connection_manager.danmaku_filter.unban_user(user_id)
+        bl = _get_blacklist(connection_manager)
+        msg = bl.unban_user(user_id)
         return {"ok": True, "user_id": user_id, "message": msg}
-    
+
     @router.get("/admin/rooms/list_patterns")
     async def list_blacklist_patterns(request: Request, token: str = Query(None)):
         validate_admin_token(token)
         connection_manager: ConnectionManager = request.app.state.danmaku_manager
-        if connection_manager.danmaku_filter is None:
-            raise HTTPException(status_code=503, detail="Danmaku filter not available")
-        patterns = connection_manager.danmaku_filter.list_patterns()
+        bl = _get_blacklist(connection_manager)
+        patterns = bl.list_patterns()
         return {"ok": True, "patterns": patterns}
-    
+
     @router.get("/admin/rooms/list_banned_users")
     async def list_banned_users(request: Request, token: str = Query(None)):
         validate_admin_token(token)
         connection_manager: ConnectionManager = request.app.state.danmaku_manager
-        if connection_manager.danmaku_filter is None:
-            raise HTTPException(status_code=503, detail="Danmaku filter not available")
-        banned_users = connection_manager.danmaku_filter.list_forbidden_users()
+        bl = _get_blacklist(connection_manager)
+        banned_users = bl.list_forbidden_users()
         return {"ok": True, "banned_users": banned_users}
 
     @router.websocket("/upstream")
@@ -204,10 +266,12 @@ def create_router(config: DanmakuConfig) -> APIRouter:
         """
         
         # 从 FastAPI 应用状态中获取连接管理器
-        request = websocket.scope.get("app")
-        assert request is not None
-        connection_manager: ConnectionManager = request.state.danmaku_manager
-        
+        app = websocket.scope.get("app")
+        if app is None:
+            await websocket.close(code=1011, reason="Server configuration error")
+            return
+        connection_manager: ConnectionManager = app.state.danmaku_manager
+
         # 未提供 token，直接拒绝连接
         if not token:
             await websocket.close(code=1008, reason="Missing authorization token")
@@ -271,6 +335,18 @@ def create_router(config: DanmakuConfig) -> APIRouter:
                     # 上游发送的弹幕统一标记为特殊弹幕
                     message.is_special = True
 
+                    # 服务端字数上限校验
+                    if isinstance(message, PlainDanmakuMessage) and len(message.text) > config.max_message_length:
+                        await websocket.send_text(
+                            json.dumps({"error": f"弹幕长度超过上限（{config.max_message_length} 字符）"})
+                        )
+                        continue
+                    if isinstance(message, SuperChatMessage) and len(message.text) > config.max_message_length:
+                        await websocket.send_text(
+                            json.dumps({"error": f"SC 文本长度超过上限（{config.max_message_length} 字符）"})
+                        )
+                        continue
+
                     # 广播弹幕到指定 group
                     await connection_manager.broadcast_to_group(
                         group, message
@@ -278,9 +354,9 @@ def create_router(config: DanmakuConfig) -> APIRouter:
 
                 except Exception as e:
                     # 数据格式错误或处理异常
-                    logger.error(f"处理上游消息错误: {e}")
+                    logger.error("处理上游消息错误: {}", e)
                     await websocket.send_text(
-                        json.dumps({"error": f"Invalid message format: {e}"})
+                        json.dumps({"error": "Invalid message format"})
                     )
 
         except WebSocketDisconnect:
@@ -297,10 +373,12 @@ def create_router(config: DanmakuConfig) -> APIRouter:
         - 客户端发送的任何内容都会被忽略
         """
         # 从 FastAPI 应用状态中获取连接管理器
-        request = websocket.scope.get("app")
-        assert request is not None
-        connection_manager: ConnectionManager = request.state.danmaku_manager
-        
+        app = websocket.scope.get("app")
+        if app is None:
+            await websocket.close(code=1011, reason="Server configuration error")
+            return
+        connection_manager: ConnectionManager = app.state.danmaku_manager
+
         # 客户端加入指定弹幕组
         await connection_manager.connect_client(websocket, group)
 

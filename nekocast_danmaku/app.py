@@ -1,5 +1,5 @@
 """Standalone FastAPI application that only exposes danmaku services."""
-# 模块说明：一个“只提供弹幕服务”的独立 FastAPI 应用入口
+# 模块说明：一个"只提供弹幕服务"的独立 FastAPI 应用入口
 
 from pathlib import Path
 
@@ -24,7 +24,6 @@ from .config import AppConfig, load_config
 # load_config：从配置文件加载配置
 
 from .emoji.cache import EmojiCache
-from .emoji.routes import router as emoji_router
 
 import asyncio
 
@@ -44,11 +43,12 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     )
 
     # 注册 CORS 中间件
-    # 当前配置为“完全放开”，适合内部服务 / 自托管前端
+    # 当前配置为"完全放开"，适合内部服务 / 自托管前端
+    # 注意: allow_credentials=True 必须配合具体 origin，不能与 "*" 共用
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -62,13 +62,6 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     
     # 创建 emoji 缓存
     app.state.emoji_cache = EmojiCache()
-
-    # 注册 emoji 路由
-    app.include_router(
-        emoji_router,
-        prefix="/api/emoji",
-        tags=["emoji"],
-    )
 
     # 注册启动 / 关闭事件
     register_event_handlers(app, config)
@@ -206,6 +199,22 @@ async def startup_danmaku(app: FastAPI, config: AppConfig) -> None:
         config.danmaku.resolved_forbidden_users_file,
     )
 
+    # ── 配置热加载 ──────────────────────────────────
+    from .danmaku.config_reloader import ConfigReloader
+    from .danmaku.config_watcher import start_config_watcher
+    from .config import resolve_path
+
+    config_reloader = ConfigReloader(app.state)
+    app.state.config_reloader = config_reloader
+    app.state.config_reload_counter = 0
+
+    config_watcher_observer, config_watcher_handler = start_config_watcher(
+        callback=lambda: config_reloader.reload(resolve_path("config.json")),
+        config_path=resolve_path("config.json"),
+    )
+    app.state.config_watcher_observer = config_watcher_observer
+    app.state.config_watcher_handler = config_watcher_handler
+
     configure_parsing_rules(
         superchat=config.danmaku.superchat,
         gift=config.danmaku.gift,
@@ -236,6 +245,7 @@ async def startup_danmaku(app: FastAPI, config: AppConfig) -> None:
         danmaku_filter=danmaku_filter,
         room_settings_service=room_settings_service,
         emote_resolver=emote_resolver,
+        max_message_length=config.danmaku.max_message_length,
     )
 
     cash_cfg = config.danmaku.cash
@@ -296,6 +306,12 @@ async def startup_danmaku(app: FastAPI, config: AppConfig) -> None:
 
 async def shutdown_danmaku(app: FastAPI) -> None:
     # 服务关闭时，断开所有弹幕连接
+
+    # 停止 config watcher
+    if hasattr(app.state, "config_watcher_observer"):
+        app.state.config_watcher_observer.stop()
+        app.state.config_watcher_observer.join(timeout=1.0)
+        logger.info("Config watcher stopped")
 
     from .danmaku.bilibili_client import stop_bilibili_client
     from .danmaku.onebot_v11_client import stop_onebot_v11_client

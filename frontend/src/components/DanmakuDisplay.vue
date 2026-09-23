@@ -72,7 +72,7 @@ function handleEmoji(msg) {
   const urls = urls_raw.map(resolveEmoteUrl).slice(0, 5) // 限制最多5个表情，避免过度占用资源
 
   for (let i = 0; i < urls.length; i++) {
-    var url = urls[i]
+    const url = urls[i]
     const task = {
       id: `${url}-${new Date().getTime()}-${i}`,
       resourceKeys: [url],
@@ -167,6 +167,10 @@ function sendMessage(msg) {
   if (!danmaku.value)
     return
 
+  // 被标记为 blocked 的消息不渲染到弹幕层（但仍会到达 WebSocket，游戏服务器可使用）
+  if (msg.blocked)
+    return
+
   const config = getConfig()
   const color = msg.color ?? config.defaultColor
   const size = msg.size ?? config.defaultSize
@@ -229,6 +233,11 @@ function connectWebSocket() {
       clearAllOverlays()
       return
     }
+    // 配置热重载广播：本组件不消费配置，但必须吞掉这一帧，
+    // 否则会落到下面的 sendMessage() 被当成一条 text 为 undefined 的弹幕
+    if (data?.type === 'config') {
+      return
+    }
     sendMessage(data)
   }
   socket.value.onclose = () => {
@@ -270,9 +279,12 @@ function initDanmaku() {
 onMounted(() => {
   initDanmaku()
   connectWebSocket()
+  // 定时清理过期缓存资源
+  assetManager._sweepTimer = setInterval(() => assetManager.sweepExpired(), 60000)
 })
 
 onUnmounted(() => {
+  if (assetManager._sweepTimer) clearInterval(assetManager._sweepTimer)
   danmakuResizeCleanup.value?.()
   danmakuResizeCleanup.value = null
   socket.value?.close()

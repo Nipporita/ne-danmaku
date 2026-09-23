@@ -168,8 +168,6 @@ async def start_onebot_v11_client(
         logger.warning("OneBot v11 客户端已经在运行")
         return onebot_task
 
-    group_map = {str(k): v for k, v in config.group_map.items()}
-
     onebot_bot = CQHttp(
         access_token=config.access_token,
         secret=config.secret,
@@ -179,11 +177,12 @@ async def start_onebot_v11_client(
     @onebot_bot.on_message("group")
     async def handle_group_message(event: Event):
         group_id = str(event.get("group_id", ""))
-        if group_id not in group_map:
+        # 直接从 config 读取 group_map，支持热加载
+        if group_id not in config.group_map:
             logger.debug("收到未配置群组的 OneBot 消息，群号: {}", group_id)
             return
 
-        danmaku_group = group_map[group_id]
+        danmaku_group = config.group_map[group_id]
         sender_id = str(event.get("user_id", ""))
         sender_name = _get_sender_name(event, sender_id)
         cash_user_id = sender_id or f"name:{sender_name}"
@@ -204,7 +203,7 @@ async def start_onebot_v11_client(
         if danmaku is None:
             return
 
-        if isinstance(danmaku, (GiftMessage, SuperChatMessage)):
+        if isinstance(danmaku, SuperChatMessage):
             allowed, balance = room_cash_system.spend_huo(
                 room_id=danmaku_group,
                 user_id=cash_user_id,
@@ -212,7 +211,16 @@ async def start_onebot_v11_client(
                 amount=danmaku.cost,
             )
             if not allowed:
-                return
+                danmaku = DanmakuBuilder.to_plain(danmaku)
+        elif isinstance(danmaku, GiftMessage):
+            allowed, balance = room_cash_system.spend_yuan(
+                room_id=danmaku_group,
+                user_id=cash_user_id,
+                user_name=sender_name,
+                amount=danmaku.cost,
+            )
+            if not allowed:
+                danmaku = DanmakuBuilder.to_plain(danmaku)
 
         await connection_manager.broadcast_to_group(danmaku_group, danmaku)
 

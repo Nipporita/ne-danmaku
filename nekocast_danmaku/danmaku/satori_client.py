@@ -106,7 +106,7 @@ async def start_satori_client(
             userid = event.user.id
             danmaku_channel = m.group(1).strip()
             if danmaku_channel in config.group_map.values():
-                cash_user_id = str(userid) or f"name:{event.user.name}"
+                cash_user_id = str(userid) if userid else f"name:{event.user.name}"
                 balance = room_cash_system.get_balance(room_id=danmaku_channel, user_id=cash_user_id, user_name=str(event.user.name))
                 if balance is None:
                     logger.warning(
@@ -155,7 +155,7 @@ async def start_satori_client(
             or event.user.name
             or "匿名"
         )
-        cash_user_id = str(userid) or f"name:{username}"
+        cash_user_id = str(userid) if userid else f"name:{username}"
 
         room_cash_system.reward_for_message(
             room_id=danmaku_channel,

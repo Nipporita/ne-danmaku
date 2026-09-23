@@ -35,28 +35,34 @@ class DanmakuHandler(BaseHandler):
         """处理普通弹幕"""
         if not client.room_id:
             return
-        self.queue.put_nowait(
-            BLiveDanmakuPacket(
-                room_id=client.room_id,
-                message=PlainDanmakuMessage(text=message.msg, sender=message.uname),
+        try:
+            self.queue.put_nowait(
+                BLiveDanmakuPacket(
+                    room_id=client.room_id,
+                    message=PlainDanmakuMessage(text=message.msg, sender=message.uname),
+                )
             )
-        )
+        except Exception:
+            pass  # queue full, drop oldest implicitly
 
     def _on_super_chat(self, client: BLiveClient, message: BLiveSuperChatMessage):
         """处理 SC (SuperChat)"""
         if not client.room_id:
             return
-        self.queue.put_nowait(
-            BLiveDanmakuPacket(
-                room_id=client.room_id,
-                message=SuperChatMessage(
-                    text=message.message,
-                    sender=message.uname,
-                    duration=message.time,
-                    cost=message.price,
-                ),
+        try:
+            self.queue.put_nowait(
+                BLiveDanmakuPacket(
+                    room_id=client.room_id,
+                    message=SuperChatMessage(
+                        text=message.message,
+                        sender=message.uname,
+                        duration=message.time,
+                        cost=message.price,
+                    ),
+                )
             )
-        )
+        except Exception:
+            pass  # queue full, drop silently
 
 
 blive_tasks: list[Task] = []
@@ -69,16 +75,14 @@ async def post_queue(
     connection_manager: ConnectionManager,
     danmaku_channel: str,
 ):
-    """从队列中取出弹幕并广播
+    """从队列中取出弹幕并广播"""
 
-    Args:
-        queue: 弹幕队列
-        connection_manager: 连接管理器
-        danmaku_channel: 弹幕频道
-    """
     while True:
-        packet = await queue.get()
-        await connection_manager.broadcast_to_group(danmaku_channel, packet.message)
+        try:
+            packet = await queue.get()
+            await connection_manager.broadcast_to_group(danmaku_channel, packet.message)
+        except Exception:
+            logger.exception("Bilibili post_queue error in room {}", danmaku_channel)
 
 
 async def start_bilibili_client(
@@ -103,11 +107,11 @@ async def start_bilibili_client(
 
     # 为每个直播间创建客户端
     for room_id, danmaku_channel in config.room_ids.items():
-        queue: Queue[BLiveDanmakuPacket] = Queue()
+        queue: Queue[BLiveDanmakuPacket] = Queue(maxsize=1000)
         handler = DanmakuHandler(queue)
         client = BLiveClient(room_id, session=blive_session, heartbeat_interval=30)
         client.set_handler(handler)
-        client.start()
+        create_task(client.start(), name=f"blive_start_room_{room_id}")
         blive_clients.append(client)
 
         blive_tasks.append(

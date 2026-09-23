@@ -168,14 +168,15 @@ function addGift(data) {
 }
 
 function resolveLevel(unitCost) {
-    if (unitCost >= 50)
-        return 5
-    if (unitCost >= 20)
-        return 4
-    if (unitCost >= 10)
-        return 3
-    if (unitCost >= 5)
-        return 2
+    // 视觉等级映射——基于 gift 实际单价，与后端 config.json 中的 gift items 定价对应
+    if (unitCost >= 500) return 9
+    if (unitCost >= 200) return 8
+    if (unitCost >= 100) return 7
+    if (unitCost >= 50)  return 6
+    if (unitCost >= 20)  return 5
+    if (unitCost >= 10)  return 4
+    if (unitCost >= 5)   return 3
+    if (unitCost >= 2)   return 2
     return 1
 }
 

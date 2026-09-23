@@ -78,6 +78,40 @@ class RoomCashSystem:
         # expire_on_commit=False 避免 DetachedInstanceError
         self.Session = sessionmaker(bind=self.engine, expire_on_commit=False)
 
+    # -------------------- 策略热更新 --------------------
+
+    def update_policy(self, **kwargs) -> list[str]:
+        """Update ``CashPolicy`` fields in-place at runtime.
+
+        Only safe fields (excluding ``secret_key``) are accepted.
+        Returns the list of field names whose values actually changed.
+        """
+        safe_fields = {
+            "enabled",
+            "initial_huo",
+            "reward_huo_per_message",
+            "reward_huo_interval_seconds",
+            "reward_huo_per_interval",
+            "initial_yuan",
+            "reward_yuan_per_message",
+            "reward_yuan_interval_seconds",
+            "reward_yuan_per_interval",
+        }
+        updated = []
+        for key, value in kwargs.items():
+            if key not in safe_fields:
+                continue
+            if not hasattr(self.policy, key):
+                continue
+            old = getattr(self.policy, key)
+            if old != value:
+                setattr(self.policy, key, value)
+                updated.append(key)
+                logger.debug("[cash] policy.{} {} -> {}", key, old, value)
+        if updated:
+            logger.info("[cash] policy updated: {}", updated)
+        return updated
+
     # -------------------- 用户初始化 --------------------
     def init_users_from_groups(self, users: list[str], room_id: str) -> None:
         with self.Session() as session:

@@ -22,7 +22,8 @@ const clientSocket = ref(null)
 const clientSocketOk = ref(false)
 const upstreamSocket = ref(null)
 const upstreamSocketOk = ref(false)
-const reconnectAttempts = ref(0)
+const clientReconnectAttempts = ref(0)
+const upstreamReconnectAttempts = ref(0)
 const authToken = ref('')
 const settingsSaving = ref(false)
 const settingsError = ref('')
@@ -76,7 +77,27 @@ const roomSettings = ref({
 })
 
 const MESSAGE_LIMIT = 100
-const MAX_MESSAGE_LENGTH = 50
+const maxMessageLength = ref(50)  // 默认值，启动后从后端拉取
+
+async function fetchMaxMessageLength() {
+  try {
+    const resp = await fetch('/api/danmaku/v1/config')
+    if (!resp.ok)
+      return
+    const data = await resp.json()
+    if (typeof data.max_message_length === 'number' && data.max_message_length > 0)
+      maxMessageLength.value = data.max_message_length
+  }
+  catch {
+    // 保持默认值
+  }
+}
+
+// 服务端热重载后广播的配置帧：{"type":"config","config_version":N,"max_message_length":M}
+function applyConfigFrame(data) {
+  if (typeof data?.max_message_length === 'number' && data.max_message_length > 0)
+    maxMessageLength.value = data.max_message_length
+}
 
 const canSend = computed(() => {
   return upstreamSocket.value
@@ -84,7 +105,7 @@ const canSend = computed(() => {
     && inputValue.value.trim()
     && senderName.value.trim()
     && authToken.value.trim()
-    && inputValue.value.length <= MAX_MESSAGE_LENGTH
+    && inputValue.value.length <= maxMessageLength.value
 })
 
 const hasAuthKey = computed(() => Boolean(authToken.value))
@@ -92,22 +113,24 @@ const canSaveSettings = computed(() => upstreamSocketOk.value && hasAuthKey.valu
 const canClearOverlay = computed(() => hasAuthKey.value && !clearingOverlay.value)
 
 function formatMessageText(message) {
+  const prefix = message?.blocked ? '[BLOCKED] ' : ''
+
   if (typeof message?.text === 'string' && message.text.trim())
-    return message.text
+    return prefix + message.text
 
   if (message?.type === 'emote')
-    return '[Emoji 消息]'
+    return prefix + '[Emoji 消息]'
 
   if (message?.type === 'superchat')
-    return `[SC] ${message?.cost ?? 0} 元, ${message?.duration ?? 0} 秒`
+    return prefix + `[SC] ${message?.cost ?? 0} 元, ${message?.duration ?? 0} 秒`
 
   if (message?.type === 'gift')
-    return `[礼物] ${message?.gift_name ?? '未知礼物'} x${message?.quantity ?? 1}, cost=${message?.cost ?? 0}`
+    return prefix + `[礼物] ${message?.gift_name ?? '未知礼物'} x${message?.quantity ?? 1}, cost=${message?.cost ?? 0}`
 
   if (message?.type === 'settings')
     return '[房间设置同步消息]'
 
-  return '[非文本消息]'
+  return prefix + '[非文本消息]'
 }
 
 function shouldShowDebugInfo(message) {
@@ -147,8 +170,8 @@ function showMessage(msg) {
 }
 
 function sendMessage() {
-  if (inputValue.value.length > MAX_MESSAGE_LENGTH) {
-    error.value = `弹幕长度不能超过${MAX_MESSAGE_LENGTH}字符`
+  if (inputValue.value.length > maxMessageLength.value) {
+    error.value = `弹幕长度不能超过${maxMessageLength.value}字符`
     return
   }
 
@@ -530,16 +553,22 @@ function connectClientWebSocket() {
   clientSocket.value = new WebSocket(wsUrl)
   clientSocket.value.onopen = () => {
     checkConnectionStatus()
+    // 断线期间可能错过配置广播，重连后补拉一次
+    fetchMaxMessageLength()
   }
   clientSocket.value.onmessage = (event) => {
     const data = JSON.parse(event.data)
+    if (data?.type === 'config') {
+      applyConfigFrame(data)
+      return
+    }
     showMessage({ ...data, source: 'client' })
   }
   clientSocket.value.onclose = () => {
     checkConnectionStatus()
-    const reconnectDelay = Math.min(30000, 2 ** Math.min(reconnectAttempts.value, 10) * 1000)
+    const reconnectDelay = Math.min(30000, 2 ** Math.min(clientReconnectAttempts.value, 10) * 1000)
     setTimeout(connectClientWebSocket, reconnectDelay)
-    reconnectAttempts.value++
+    clientReconnectAttempts.value++
   }
   clientSocket.value.onerror = () => {
     clientSocket.value?.close()
@@ -565,9 +594,15 @@ function connectUpstreamWebSocket() {
     fetchRoomUsers()
     fetchBannedUsers()
     fetchPatterns()
+    fetchMaxMessageLength()
   }
   upstreamSocket.value.onmessage = (event) => {
     const data = JSON.parse(event.data)
+    // 防御：配置帧只发给客户端连接，但若将来扇出扩大，这里不能当成聊天卡片渲染
+    if (data?.type === 'config') {
+      applyConfigFrame(data)
+      return
+    }
     if (data.error) {
       showMessage({ text: `上游错误: ${data.error}`, source: 'upstream' })
       return
@@ -577,9 +612,9 @@ function connectUpstreamWebSocket() {
   upstreamSocket.value.onclose = () => {
     checkConnectionStatus()
     if (authToken.value) {
-      const reconnectDelay = Math.min(30000, 2 ** reconnectAttempts.value * 1000)
+      const reconnectDelay = Math.min(30000, 2 ** upstreamReconnectAttempts.value * 1000)
       setTimeout(connectUpstreamWebSocket, reconnectDelay)
-      reconnectAttempts.value++
+      upstreamReconnectAttempts.value++
     }
   }
   upstreamSocket.value.onerror = () => {
@@ -596,7 +631,8 @@ function checkConnectionStatus() {
   if (clientConnected || upstreamConnected) {
     if (loading.value) {
       loading.value = false
-      reconnectAttempts.value = 0
+      clientReconnectAttempts.value = 0
+      upstreamReconnectAttempts.value = 0
       const connections = []
       if (clientConnected)
         connections.push('客户端')
@@ -628,6 +664,13 @@ watch(() => props.authKey, (value) => {
     authToken.value = normalized
 }, { immediate: true })
 
+watch(moderationPanelOpen, (val) => {
+  if (val) {
+    fetchBannedUsers()
+    fetchPatterns()
+  }
+})
+
 watch(authToken, () => {
   if (authToken.value) {
     connectUpstreamWebSocket()
@@ -640,12 +683,14 @@ watch(authToken, () => {
 watch(() => props.roomId, () => {
   clientSocket.value?.close()
   upstreamSocket.value?.close()
-  reconnectAttempts.value = 0
+  clientReconnectAttempts.value = 0
+  upstreamReconnectAttempts.value = 0
   messages.value = []
   connectWebSocket()
 })
 
 onMounted(() => {
+  fetchMaxMessageLength()
   connectWebSocket()
 })
 
@@ -673,6 +718,7 @@ onUnmounted(() => {
       <article v-for="(message, index) in messages" :key="index" class="message-card">
         <header class="message-meta">
           <strong v-if="message.sender" class="message-sender">{{ message.sender }}</strong>
+          <span v-if="message?.blocked" class="message-tag blocked">BLOCKED</span>
           <span v-if="message.source" class="message-tag" :class="message.source">
             {{ message.source === 'client' ? '客户端' : message.source === 'upstream' ? '上游' : '系统' }}
           </span>
@@ -915,7 +961,7 @@ onUnmounted(() => {
         {{ hasAuthKey ? 'URL key 已加载' : '缺少 URL key，无法连接上游' }}
       </div>
       <input v-model="senderName" class="text-input" type="text" placeholder="输入昵称...">
-      <input v-model="inputValue" class="text-input" type="text" :maxlength="MAX_MESSAGE_LENGTH" placeholder="输入弹幕..."
+      <input v-model="inputValue" class="text-input" type="text" :maxlength="maxMessageLength" placeholder="输入弹幕..."
         @keydown.enter="sendMessage">
       <button class="primary-btn" :disabled="!canSend" @click="sendMessage">
         发送数据包
@@ -924,7 +970,7 @@ onUnmounted(() => {
     </section>
 
     <div v-if="inputValue" class="char-counter">
-      {{ inputValue.length }}/{{ MAX_MESSAGE_LENGTH }}
+      {{ inputValue.length }}/{{ maxMessageLength }}
     </div>
   </div>
 </template>
@@ -1071,6 +1117,11 @@ onUnmounted(() => {
 .message-tag.system {
   background: rgba(148, 163, 184, 0.2);
   color: #cbd5f5;
+}
+
+.message-tag.blocked {
+  background: rgba(239, 68, 68, 0.25);
+  color: #fca5a5;
 }
 
 .message-text {

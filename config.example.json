@@ -16,7 +16,7 @@
     },
     "bilibili": {
       "room_ids": {
-        "B站直播房号": "房间名"
+        "123456": "房间名"
       },
       "sess_data": "B站登录用 SESS_DATA"
     },
@@ -117,7 +117,9 @@
       "db_path": "cash.db"
     },
     "room_db_path": "room.db",
+    "dedup_window": 5,
+    "asset_dir": "assets_danmaku",
     "emote_alias_token": "表情别名管理 token，请修改",
-    "blacklists": []
+    "max_message_length": 50
   }
 }

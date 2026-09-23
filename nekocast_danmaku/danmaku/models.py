@@ -98,10 +98,14 @@ class BlacklistService:
     """
 
     def __init__(self):
+        import threading
+
+        self._lock = threading.Lock()
+
         # 已编译的正则
         self._patterns: list[regex.Pattern] = []
         self._pattern_strings: set[str] = set()  # 用于快速检查是否已存在某个模式字符串
-        
+
         self._pattern_in_file: list[str] = []  # 维护一个原始字符串列表，保持与文件一致的顺序（用于持久化）
 
         # 禁止用户 ID
@@ -318,22 +322,30 @@ class BlacklistService:
     # 判定（核心）
     # =========================
 
-    def should_filter(self, message: DanmakuMessage) -> bool:
+    def check_message(self, message: DanmakuMessage) -> None:
         """
-        判断一条弹幕是否应被黑名单过滤
+        检查一条弹幕是否应被标记为 blocked。
+
+        注意：此方法只负责标记 ``message.blocked``，不再丢弃消息。
+        所有消息都会广播到前端，由前端根据 ``blocked`` 字段决定是否展示。
         """
 
+        # 线程安全：快照引用后释放锁，避免在 regex 匹配期间持有锁
+        with self._lock:
+            forbidden_users = self._forbidden_users.copy()
+            patterns = list(self._patterns)
+
         # ---------- 用户黑名单 ----------
-        if message.senderId and message.senderId in self._forbidden_users:
+        if message.senderId and message.senderId in forbidden_users:
             logger.info("Message blocked by forbidden user: {}", message.senderId)
-            return True
+            message.blocked = True
 
         # ---------- 用户昵称黑名单（按照文本匹配） ----------
         if isinstance(message, (SuperChatMessage, GiftMessage)) and message.sender:
-            for pattern in self._patterns:
+            for pattern in patterns:
                 if pattern.search(message.sender):
                     logger.info(
-                        "Message blocked by forbidden sender name: {}, triggered by pattern: {}",
+                        "Sender name censored by pattern: {}, triggered by: {}",
                         message.sender,
                         pattern.pattern,
                     )
@@ -341,36 +353,36 @@ class BlacklistService:
                     message.sender = pattern.sub(
                         lambda m: "*" * len(m.group(0)), message.sender
                     )
-                    # return True  # 你可以选择是否过滤整条消息
 
         # ---------- 文本黑名单 ----------
         if isinstance(message, (PlainDanmakuMessage, SuperChatMessage)):
             text = message.text
         else:
-            return False
+            return
 
         if not text:
-            return False
+            return
 
-        for pattern in self._patterns:
+        for pattern in patterns:
             if pattern.search(text):
                 if isinstance(message, SuperChatMessage):
-                    # 替换敏感词
-                    logger.info(
-                        "Message blocked by forbidden sender name: {}, triggered by pattern: {}",
-                        message.sender,
-                        pattern.pattern,
-                    )
+                    # SC 打码（展示在屏幕上，需要脱敏）
                     message.text = pattern.sub(
                         lambda m: "*" * len(m.group(0)), message.text
                     )
-                else:
                     logger.info(
-                        "Message blocked by blacklist pattern: {}...", text[:20]
+                        "SC text censored by pattern: {}, sender={}",
+                        pattern.pattern,
+                        message.sender,
                     )
-                    return True
-
-        return False
+                else:
+                    # 普通弹幕：保留原文，只标记 blocked（游戏指令等需要完整文本）
+                    logger.info(
+                        "Message blocked by pattern: {}, text={}...",
+                        pattern.pattern,
+                        text[:20],
+                    )
+                    message.blocked = True
 
     def close(self) -> None:
         """关闭黑名单服务，释放资源"""
@@ -423,67 +435,20 @@ class DanmakuFilter:
         self.dedup_window = dedup_window  # 去重时间窗口（秒）
 
         # 记录最近弹幕：
-        # group -> deque[(text, timestamp, should_filter)]
+        # group -> deque[(text, timestamp)]
         self.recent_messages: dict[str, deque] = defaultdict(deque)
 
         self.blacklist: BlacklistService | None = blacklist
     
-    def append_pattern(self, text: str, hard: bool = False) -> str:
-        """动态追加一个黑名单正则模式"""
-        if self.blacklist:
-            return self.blacklist.append_pattern(text, hard=hard)
-        else:
-            logger.warning("Cannot append blacklist pattern because blacklist service is not set up")
-            return "Cannot append blacklist pattern because blacklist service is not set up"
-    
-    def remove_pattern(self, text: str, hard: bool = False) -> str:
-        """动态移除一个黑名单正则模式"""
-        if self.blacklist:
-            return self.blacklist.remove_pattern(text, hard=hard)
-        else:
-            logger.warning("Cannot remove blacklist pattern because blacklist service is not set up")
-            return "Cannot remove blacklist pattern because blacklist service is not set up"
-    
-    def ban_user(self, user_id: str, hard: bool = False) -> str:
-        """动态禁止一个用户 ID"""
-        if self.blacklist:
-            return self.blacklist.ban_user(user_id, hard=hard)
-        else:
-            logger.warning("Cannot ban user ID because blacklist service is not set up")
-            return "Cannot ban user ID because blacklist service is not set up"
-    
-    def unban_user(self, user_id: str, hard: bool = False) -> str:
-        """动态解除禁止一个用户 ID"""
-        if self.blacklist:
-            return self.blacklist.unban_user(user_id, hard=hard)
-        else:
-            logger.warning("Cannot unban user ID because blacklist service is not set up")
-            return "Cannot unban user ID because blacklist service is not set up"
-    
-    def list_patterns(self) -> list[dict[str, Any]]:
-        """列出当前的黑名单正则模式"""
-        if self.blacklist:
-            return self.blacklist.list_patterns()
-        else:
-            logger.warning("Cannot list blacklist patterns because blacklist service is not set up")
-            return []
-    
-    def list_forbidden_users(self) -> list[dict[str, Any]]:
-        """列出当前的禁止用户 ID"""
-        if self.blacklist:
-            return self.blacklist.list_forbidden_users()
-        else:
-            logger.warning("Cannot list forbidden users because blacklist service is not set up")
-            return []
 
-    def should_filter(self, group: str, message: DanmakuMessage) -> bool:
-        """判断一条弹幕是否应该被过滤"""
+    def check_message(self, group: str, message: DanmakuMessage) -> None:
+        """检查弹幕并标记 blocked 标志，不再丢弃消息"""
 
         current_time = time.time()
 
         # ---------- 黑名单过滤 ----------
-        if self.blacklist and self.blacklist.should_filter(message):
-            return True
+        if self.blacklist:
+            self.blacklist.check_message(message)
 
         # ---------- 文字去重过滤 ----------
         if isinstance(message, PlainDanmakuMessage):
@@ -500,13 +465,12 @@ class DanmakuFilter:
                 # 检查是否出现过完全相同的弹幕
                 for recent_text, _ in recent:
                     if recent_text == text:
-                        logger.info(f"重复消息被过滤: {text[:20]}...")
-                        return True
-
-                # 记录当前弹幕
-                recent.append((text, current_time))
-
-        return False
+                        logger.info("重复消息被标记: {}...", text[:20])
+                        message.blocked = True
+                        break
+                else:
+                    # 不是重复才记录（重复消息不占去重槽位）
+                    recent.append((text, current_time))
 
     def close(self) -> None:
         """关闭过滤器，释放资源"""
@@ -534,6 +498,7 @@ class ConnectionManager:
         danmaku_filter: DanmakuFilter | None = None,
         room_settings_service: RoomSettingsService | None = None,
         emote_resolver: EmoteResolver | None = None,
+        max_message_length: int = 50,
     ):
         # 客户端连接：
         # group -> set[WebSocket]
@@ -545,6 +510,7 @@ class ConnectionManager:
         self.danmaku_filter = danmaku_filter
         self.room_settings_service = room_settings_service
         self.emote_resolver = emote_resolver
+        self.max_message_length = max_message_length
 
     # ---------- 连接管理 ----------
 
@@ -605,9 +571,9 @@ class ConnectionManager:
         if group not in self.client_connections:
             return
 
-        # 过滤检查
-        if self.danmaku_filter and self.danmaku_filter.should_filter(group, message):
-            return
+        # 过滤检查（标记 blocked 标志，不丢弃消息）
+        if self.danmaku_filter:
+            self.danmaku_filter.check_message(group, message)
 
         # 外部表情过滤：到达此处已是 EmoteMessage 的来自外部源
         if (
@@ -631,23 +597,37 @@ class ConnectionManager:
                     senderId=message.senderId,
                     sender=message.sender,
                     is_special=message.is_special,
+                    blocked=message.blocked,
                 )
+
+        # 字数上限截断（对外部来源静默截断，上游 WS 已有前置校验）
+        # 必须放在表情解析之后：EMOTE_PATTERN 要求 [name] 完整闭合，
+        # 先截断会把跨边界的 "[表情名" 截成无法匹配的字面量
+        if isinstance(message, PlainDanmakuMessage) and len(message.text) > self.max_message_length:
+            logger.info("弹幕过长（{} 字符），已截断", len(message.text))
+            message.text = message.text[: self.max_message_length]
+        if isinstance(message, SuperChatMessage) and len(message.text) > self.max_message_length:
+            logger.info("SC 文本过长（{} 字符），已截断", len(message.text))
+            message.text = message.text[: self.max_message_length]
 
         # 特殊弹幕追加标识
         if message.is_special and isinstance(message, PlainDanmakuMessage):
             message.text += "👑"
 
-        message_json = message.model_dump_json()
-        disconnected = []
+        await self._send_and_prune(group, message.model_dump_json())
 
-        # 向所有客户端发送
+    async def _send_and_prune(self, group: str, payload: str) -> None:
+        """向 group 内所有客户端发送 *payload*，并清理发送失败的连接"""
+        if group not in self.client_connections:
+            return
+
+        disconnected = []
         for websocket in self.client_connections[group]:
             try:
-                await websocket.send_text(message_json)
+                await websocket.send_text(payload)
             except Exception:
                 disconnected.append(websocket)
 
-        # 清理失效连接
         for ws in disconnected:
             self.disconnect_client(ws, group)
 
@@ -663,99 +643,19 @@ class ConnectionManager:
         await websocket.send_text(self._build_settings_payload(group))
 
     async def broadcast_room_settings(self, group: str):
-        if group not in self.client_connections:
-            return
-
-        payload = self._build_settings_payload(group)
-        disconnected = []
-        for websocket in self.client_connections[group]:
-            try:
-                await websocket.send_text(payload)
-            except Exception:
-                disconnected.append(websocket)
-
-        for ws in disconnected:
-            self.disconnect_client(ws, group)
+        await self._send_and_prune(group, self._build_settings_payload(group))
 
     async def broadcast_control_message(self, group: str, action: str):
         """向指定群组广播控制指令（例如清空前端覆盖层）"""
-        if group not in self.client_connections:
-            return
+        await self._send_and_prune(group, json.dumps({"type": "control", "action": action}))
 
-        payload = json.dumps({"type": "control", "action": action})
-        disconnected = []
-        for websocket in self.client_connections[group]:
-            try:
-                await websocket.send_text(payload)
-            except Exception:
-                disconnected.append(websocket)
+    async def broadcast_config(self, payload: dict):
+        """向所有分组的客户端广播配置变更。
 
-        for ws in disconnected:
-            self.disconnect_client(ws, group)
-
-
-class DedupQueue:
-    def __init__(self, dedup_window: float, blacklist_window: float = 20):
-        self.filter_dedup_window = dedup_window
-        self.filter_queue: deque[tuple[tuple[str | None, str], float, bool]] = deque()
-        self.filter_seen: set[tuple[str | None, str]] = set()
-
-        self.blacklist_dedup_window = blacklist_window
-        self.blacklist_queue: deque[tuple[tuple[str | None, str], float, bool]] = (
-            deque()
-        )
-        self.blacklist_seen: dict[tuple[str | None, str], bool] = dict()
-
-    def _message_key(self, message: "DanmakuMessage") -> tuple:
-        """根据弹幕类型动态生成去重/黑名单 key"""
-        if isinstance(message, SuperChatMessage) and message.sender:
-            return (message.sender, message.text)
-        if isinstance(message, GiftMessage) and message.sender:
-            return (message.sender, message.gift_name)
-        if isinstance(message, PlainDanmakuMessage):
-            return (None, message.text)
-        if isinstance(message, EmoteMessage):
-            return (message.sender, message.emote_url)
-        return (None, "")
-
-    def _clean_queue(self):
-        now = time.time()
-        while (
-            self.filter_queue
-            and now - self.filter_queue[0][1] > self.filter_dedup_window
-        ):
-            key, ts, should_filter = self.filter_queue.popleft()
-            self.filter_seen.remove(key)
-            self.blacklist_queue.append((key, ts, should_filter))
-            self.blacklist_seen[key] = should_filter
-
-        while (
-            self.blacklist_queue
-            and now - self.blacklist_queue[0][1] > self.blacklist_dedup_window
-        ):
-            key, _, _ = self.blacklist_queue.popleft()
-            self.blacklist_seen.pop(key, None)
-
-    def add(
-        self, message: DanmakuMessage, blacklist: Optional["BlacklistService"] = None
-    ) -> bool:
-        self._clean_queue()
-        key = self._message_key(message)
-
-        # 短期去重
-        if key in self.filter_seen:
-            return True
-
-        # 黑名单缓存
-        if key in self.blacklist_seen:
-            return self.blacklist_seen[key]
-
-        # 黑名单检测
-        should_filter = False
-        if blacklist and blacklist.should_filter(message):
-            should_filter = True
-
-        self.filter_queue.append((key, time.time(), should_filter))
-        self.filter_seen.add(key)
-
-        return should_filter
+        配置是全局的（不区分 group），因此与 ``broadcast_room_settings``
+        不同，这里扇出到每一个已连接的分组。
+        """
+        data = json.dumps(payload)
+        # list() 快照：_send_and_prune 可能删掉空 group
+        for group in list(self.client_connections):
+            await self._send_and_prune(group, data)

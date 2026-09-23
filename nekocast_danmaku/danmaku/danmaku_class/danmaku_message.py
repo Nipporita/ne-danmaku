@@ -15,6 +15,7 @@ class DanmakuBase(BaseModel):
     sender: str | None = None     # 发送者昵称
     is_special: bool = False      # 是否为特殊弹幕（如加标识）
     type: str                     # 弹幕类型标识符
+    blocked: bool = False         # 是否被黑名单/去重标记（消息仍会广播，由前端决定是否展示）
     
     class Config:
         """Pydantic 配置"""

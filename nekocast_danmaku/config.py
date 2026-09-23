@@ -106,6 +106,7 @@ class DanmakuConfig(BaseModel):
     room_db_path: Optional[Path] = None
     dedup_window: int = 5  # 去重时间窗口，单位秒
     emote_alias_token: Optional[str] = None
+    max_message_length: int = 50  # 弹幕字数上限
 
     asset_dir: Path = DEFAULT_ASSET_DIR
     blacklist_file: Optional[Path] = None
@@ -152,7 +153,11 @@ def load_config(config_path: str | Path = "config.json") -> AppConfig:
 
     except Exception as exc:
         logger.error("Failed to load config {}: {}", config_file, exc)
-        return AppConfig()
+        # 文件不存在的情况已在上面提前返回，能走到这里说明文件存在但无法解析
+        # （JSON 语法错误 / 字段校验失败）→ 抛出异常阻止启动，避免带着默认值跑起来
+        raise RuntimeError(
+            f"Config file {config_file} exists but failed to parse: {exc}"
+        ) from exc
 
 
 def save_config(config: AppConfig, config_path: str | Path = "config.json") -> bool:
@@ -163,9 +168,10 @@ def save_config(config: AppConfig, config_path: str | Path = "config.json") -> b
 
     try:
         with config_file.open("w", encoding="utf-8") as f:
+            # mode="json"：Path 等类型序列化为字符串，否则 json.dump 会抛 TypeError
             # exclude_none=True：不写入值为 None 的字段
             json.dump(
-                config.model_dump(exclude_none=True),
+                config.model_dump(mode="json", exclude_none=True),
                 f,
                 indent=2,
                 ensure_ascii=False,
