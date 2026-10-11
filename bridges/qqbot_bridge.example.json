@@ -1,0 +1,30 @@
+{
+  "_说明": [
+    "把本文件复制为 qqbot_bridge.json 再填（该文件已在 .gitignore 里，不会误提交）。",
+    "app_id / client_secret 在 QQ 开放平台机器人管理端的「开发设置」里。",
+    "groups 里的键是 group_openid（不是群号！），程序发现未配置的群时会在日志里打印它的 openid。",
+    "danmaku.access_token 必须与弹幕姬 config.json 里 onebot_v11.access_token 完全一致。"
+  ],
+
+  "app_id": "102xxxxxx",
+  "client_secret": "你的AppSecret",
+  "sandbox": false,
+
+  "danmaku": {
+    "url": "ws://127.0.0.1:5701/ws",
+    "access_token": "与弹幕姬 onebot_v11.access_token 相同",
+    "self_id": 10000
+  },
+
+  "groups": {
+    "把这里换成真实 group_openid": {
+      "group_id": 278699690,
+      "room": "弹幕群"
+    }
+  },
+
+  "blacklist_file": "../assets_danmaku/blacklist.txt",
+  "max_message_length": 50,
+  "forward_images": true,
+  "log_level": "INFO"
+}

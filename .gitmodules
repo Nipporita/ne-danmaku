@@ -1,0 +1,6 @@
+[submodule "blacklist/Sensitive-lexicon"]
+	path = blacklist/Sensitive-lexicon
+	url = https://github.com/Konsheng/Sensitive-lexicon.git
+[submodule "blacklist/sensitive-stop-words"]
+	path = blacklist/sensitive-stop-words
+	url = https://github.com/fwwdn/sensitive-stop-words.git

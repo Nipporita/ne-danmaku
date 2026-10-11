@@ -27,6 +27,8 @@ from .danmaku_class.danmaku_message import (
     PlainDanmakuMessage,
     SuperChatMessage,
 )
+from .game_events import onebot_role_is_admin, recall_frame, reaction_frame
+from .event_probe import mark_handled, record as probe_record
 from .models import ConnectionManager
 
 
@@ -143,7 +145,14 @@ async def _build_danmaku_message(
         if seg.get("type") == "text"
     )
 
-    avatar_url = f"https://q1.qlogo.cn/g?b=qq&nk={sender_id}&s=100" if sender_id else None
+    # ⚠️ 只有真实 QQ 号（全数字）才拼头像 URL。
+    # 官方机器人通道（bridges/qqbot_official_bridge.py）给的是 OpenID（形如 A1B2C3…，含字母），
+    # 拼出来的 qlogo URL 必然取不到头像，却会在**每条消息上白等最多 10 秒**
+    # （见 emoji/cache.py 的 httpx timeout=10，且该 await 发生在广播之前），
+    # 直接表现为弹幕上屏延迟。这里直接跳过，前端会用默认头像。
+    avatar_url = None
+    if sender_id and sender_id.isdigit():
+        avatar_url = f"https://q1.qlogo.cn/g?b=qq&nk={sender_id}&s=100"
     if avatar_url is not None:
         cached_avatar_url = await emoji_cache.load_emoji(avatar_url, sender_id, ttl_seconds=3600)
         avatar_url = cached_avatar_url or avatar_url
@@ -222,7 +231,76 @@ async def start_onebot_v11_client(
             if not allowed:
                 danmaku = DanmakuBuilder.to_plain(danmaku)
 
+        # 与 Satori 通道对齐：广播前补上上游消息 ID 与成员角色
+        #   message_id —— 撤回 / 贴表情事件要按它对齐"大屏上的这个答案"
+        #   is_admin   —— 群主 / 管理员，游戏前端据此自动认定主持人
+        # 放在余额不足降级（to_plain 会重建对象）之后，否则会被丢掉
+        raw_message_id = event.get("message_id")
+        danmaku.message_id = str(raw_message_id) if raw_message_id is not None else None
+        danmaku.is_admin = onebot_role_is_admin((event.get("sender") or {}).get("role"))
+
         await connection_manager.broadcast_to_group(danmaku_group, danmaku)
+
+    @onebot_bot.on_notice("group_recall")
+    async def handle_group_recall(event: Event):
+        """群消息被撤回 → 推给大屏（与 Satori 通道同款事件帧）"""
+        group_id = str(event.get("group_id", ""))
+        danmaku_group = config.group_map.get(group_id)
+        if danmaku_group is None:
+            logger.debug("撤回事件来自未配置群组，群号: {}", group_id)
+            return
+        message_id = event.get("message_id")
+        if message_id is None:
+            return
+        frame = recall_frame(
+            message_id,
+            sender_id=event.get("user_id", ""),
+            operator_id=event.get("operator_id", ""),
+            channel_id=group_id,
+        )
+        logger.info(
+            "撤回：群 {}, 消息 {}, 作者 {}, 操作者 {}",
+            danmaku_group,
+            frame["message_id"],
+            frame["sender_id"],
+            frame["operator_id"],
+        )
+        await connection_manager.broadcast_frame(danmaku_group, frame)
+
+    @onebot_bot.on_notice("group_msg_emoji_like")
+    async def handle_group_msg_emoji_like(event: Event):
+        """有人给某条消息贴了表情（或取消了）→ 推给大屏（游戏侧用作答题审核）"""
+        group_id = str(event.get("group_id", ""))
+        danmaku_group = config.group_map.get(group_id)
+        if danmaku_group is None:
+            logger.debug("表情事件来自未配置群组，群号: {}", group_id)
+            return
+        message_id = event.get("message_id")
+        if message_id is None:
+            return
+        # is_add=False 是"取消表情"，游戏侧理解为「取消审核」，同样要推下去
+        action = "remove" if event.get("is_add") is False else "add"
+        likes = event.get("likes") or []
+        emoji = ""
+        if likes:
+            first = likes[0]
+            emoji = str(first.get("emoji_id", "")) if isinstance(first, dict) else str(first)
+        frame = reaction_frame(
+            message_id,
+            sender_id=event.get("user_id", ""),
+            emoji=emoji,
+            channel_id=group_id,
+            action=action,
+        )
+        logger.info(
+            "表情事件：{}，群 {}, 消息 {}, 用户 {}, 表情 {}",
+            "取消" if action == "remove" else "贴",
+            danmaku_group,
+            frame["message_id"],
+            frame["sender_id"],
+            frame["emoji"],
+        )
+        await connection_manager.broadcast_frame(danmaku_group, frame)
 
     @onebot_bot.on_startup
     async def on_startup():
@@ -231,6 +309,18 @@ async def start_onebot_v11_client(
             config.host,
             config.port,
         )
+
+    # 事件探针：OneBot 侧的同款兜底登记（含未被处理的 notice 类型）
+    mark_handled("message.group", "notice.group_recall", "notice.group_msg_emoji_like")
+
+    @onebot_bot.on_notice()
+    async def probe_all_notices(event: Event):
+        probe_record("notice." + str(event.get("notice_type", "?")), {
+            "message_id": str(event.get("message_id", "") or ""),
+            "user_id": str(event.get("user_id", "") or ""),
+            "operator_id": str(event.get("operator_id", "") or ""),
+            "channel_id": str(event.get("group_id", "") or ""),
+        })
 
     onebot_server = Server(
         Config(

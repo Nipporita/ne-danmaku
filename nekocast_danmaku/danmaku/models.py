@@ -17,6 +17,9 @@ from loguru import logger
 from pydantic import BaseModel, model_validator
 
 from .danmaku_class.danmaku_message import (
+    BLOCK_REASON_DUPLICATE,
+    BLOCK_REASON_USER,
+    BLOCK_REASON_WORD,
     DanmakuMessage,
     EmoteMessage,
     MultiEmoteMessage,
@@ -26,6 +29,35 @@ from .danmaku_class.danmaku_message import (
 )
 
 from ..emotes.resolver import EmoteResolver
+from .inline_elements import segments as inline_segments, to_plain_text
+
+
+def annotate_inline_elements(message: Any) -> None:
+    """把文本里的行内元素（``<face id="339" type="2" platform="llonebot"/>`` 之类）解析出来。
+
+    上游会把表情这类"不是纯文字"的段塞进消息文本里。显示层要能**行内渲染**它
+    （见 ``message.inline``），而游戏那种只认纯文本的消费者需要一个已经替换干净的
+    版本（``message.text_plain``，元素一律换成 █）。
+
+    ``platform`` 之类的附加属性不做处理（只在 attrs / raw 里）；"整条只有元素"
+    的消息也不特殊对待 —— 对游戏来说它的纯文本就是 ``█``，照样算数。
+
+    没有行内元素时不动任何字段（保持帧尽量小）。
+    """
+    raw = getattr(message, "text", "") or ""
+    if "<" not in raw:
+        return
+    segs = inline_segments(raw)
+    if not segs or all(seg.get("kind") == "text" for seg in segs):
+        return
+    message.inline = segs
+    message.text_plain = to_plain_text(raw)
+    logger.info(
+        "行内元素 {} 段（纯文本：{}）",
+        sum(1 for seg in segs if seg.get("kind") != "text"),
+        message.text_plain,
+    )
+
 
 # =========================
 # 上游传输数据包
@@ -87,6 +119,10 @@ class RoomSettingsService:
 # 弹幕过滤器
 # =========================
 
+# 第三方词表（blacklist_extra_files）里，短于这个长度的词直接丢弃。
+# 单字在弹幕里太常见（"草""操"这类），当过滤词会把大量正常弹幕也标成 blocked。
+MIN_LITERAL_PATTERN_LEN = 2
+
 
 class BlacklistService:
     """
@@ -97,7 +133,7 @@ class BlacklistService:
     - 发送者 ID 黑名单
     """
 
-    def __init__(self):
+    def __init__(self, extra_pattern_files: list[Path] | None = None):
         import threading
 
         self._lock = threading.Lock()
@@ -108,6 +144,14 @@ class BlacklistService:
 
         self._pattern_in_file: list[str] = []  # 维护一个原始字符串列表，保持与文件一致的顺序（用于持久化）
 
+        # 每条规则来自哪个文件（排查误伤时很有用：能直接指出"是哪个词库哪一行"）
+        self._pattern_sources: dict[str, str] = {}
+
+        # 额外的「词表」文件（第三方开源词库，一般以 submodule 引入，见 config 的
+        # blacklist_extra_files）。它们按**字面量**匹配，而且**不进** _pattern_in_file：
+        # 管理端的增删改只应作用于主黑名单文件，不该去改写别人仓库里的词表。
+        self._extra_pattern_files: list[Path] = [Path(p) for p in (extra_pattern_files or [])]
+
         # 禁止用户 ID
         self._forbidden_users: set[str] = set()
         self._forbidden_users_in_file: list[str] = []  # 维护一个原始用户 ID 列表，保持与文件一致的顺序（用于持久化）
@@ -115,6 +159,10 @@ class BlacklistService:
         self.watchdog: Any = None  # 文件监视器（外部设置）
         
         self.handler: Any = None  # Watchdog 事件处理器（外部设置）
+
+    @property
+    def extra_pattern_files(self) -> list[Path]:
+        return list(self._extra_pattern_files)
 
     # =========================
     # 加载 / 重载
@@ -133,7 +181,40 @@ class BlacklistService:
         self._patterns = compiled
         self._pattern_strings = set(pat.pattern for pat in compiled)
         self._pattern_in_file = patterns  # 保持原始字符串列表
+        self._pattern_sources = {pat.pattern: str(path) for pat in compiled}
         logger.info("Loaded {} blacklist regex patterns", len(compiled))
+
+    def load_literal_patterns(self, path: Path) -> int:
+        """加载一份「词表」：每行一个词，按**字面量**匹配，不做正则解析。
+
+        第三方开源词库（submodule 进来的那种）都是普通词表，里面的 `*`、`(`
+        只是普通字符；按正则解析会变成通配符，误伤会大得离谱。
+        长度 < MIN_LITERAL_PATTERN_LEN 的词也丢掉：单字在弹幕里太常见
+        （"草""操"这种），当过滤词会把大半正常弹幕也标成 blocked。
+        """
+        words = self._load_lines(path)
+        added = skipped_short = duplicated = 0
+        for word in words:
+            if len(word) < MIN_LITERAL_PATTERN_LEN:
+                skipped_short += 1
+                continue
+            try:
+                compiled = regex.compile(regex.escape(word), regex.IGNORECASE)
+            except regex.error as exc:
+                logger.error("Invalid literal pattern '{}': {}", word, exc)
+                continue
+            if compiled.pattern in self._pattern_strings:
+                duplicated += 1
+                continue
+            self._patterns.append(compiled)
+            self._pattern_strings.add(compiled.pattern)
+            self._pattern_sources[compiled.pattern] = str(path)
+            added += 1
+        logger.info(
+            "Loaded {} literal patterns from {} (skipped {} too short, {} duplicated)",
+            added, path.name, skipped_short, duplicated,
+        )
+        return added
 
     def load_users(self, path: Path) -> None:
         self._forbidden_users = set(self._load_lines(path))
@@ -142,6 +223,11 @@ class BlacklistService:
 
     def reload(self, pattern_path: Path, user_path: Path) -> None:
         self.load_patterns(pattern_path)
+        for extra in self._extra_pattern_files:
+            if Path(extra).exists():
+                self.load_literal_patterns(Path(extra))
+            else:
+                logger.warning("Extra blacklist file not found, skipped: {}", extra)
         self.load_users(user_path)
     
     def append_pattern(self, pattern: str, hard: bool = False) -> str:
@@ -330,6 +416,10 @@ class BlacklistService:
         所有消息都会广播到前端，由前端根据 ``blocked`` 字段决定是否展示。
         """
 
+        # ---------- 行内元素（<face .../> 之类） ----------
+        # 放在最前面：所有消息类型都要过这一步（后面按类型 early return 了）
+        annotate_inline_elements(message)
+
         # 线程安全：快照引用后释放锁，避免在 regex 匹配期间持有锁
         with self._lock:
             forbidden_users = self._forbidden_users.copy()
@@ -338,7 +428,7 @@ class BlacklistService:
         # ---------- 用户黑名单 ----------
         if message.senderId and message.senderId in forbidden_users:
             logger.info("Message blocked by forbidden user: {}", message.senderId)
-            message.blocked = True
+            message.mark_blocked(BLOCK_REASON_USER)
 
         # ---------- 用户昵称黑名单（按照文本匹配） ----------
         if isinstance(message, (SuperChatMessage, GiftMessage)) and message.sender:
@@ -382,7 +472,7 @@ class BlacklistService:
                         pattern.pattern,
                         text[:20],
                     )
-                    message.blocked = True
+                    message.mark_blocked(BLOCK_REASON_WORD)
 
     def close(self) -> None:
         """关闭黑名单服务，释放资源"""
@@ -466,7 +556,7 @@ class DanmakuFilter:
                 for recent_text, _ in recent:
                     if recent_text == text:
                         logger.info("重复消息被标记: {}...", text[:20])
-                        message.blocked = True
+                        message.mark_blocked(BLOCK_REASON_DUPLICATE)
                         break
                 else:
                     # 不是重复才记录（重复消息不占去重槽位）
@@ -648,6 +738,18 @@ class ConnectionManager:
     async def broadcast_control_message(self, group: str, action: str):
         """向指定群组广播控制指令（例如清空前端覆盖层）"""
         await self._send_and_prune(group, json.dumps({"type": "control", "action": action}))
+
+    async def broadcast_frame(self, group: str, payload: dict):
+        """向指定群组广播一条「非弹幕」事件帧。
+
+        用于撤回（recall）、贴表情（reaction）这类不携带 text/sender 的事件：
+        它们不能走 ``broadcast_to_group`` —— 那条路会做黑名单/去重标记、
+        内置表情解析、补 👑 等只对弹幕有意义的处理。
+        客户端只需要额外认一个 ``type`` 字段，老客户端会走不到任何分支而忽略。
+        """
+        await self._send_and_prune(
+            group, json.dumps(payload, ensure_ascii=False)
+        )
 
     async def broadcast_config(self, payload: dict):
         """向所有分组的客户端广播配置变更。

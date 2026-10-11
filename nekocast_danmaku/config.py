@@ -112,9 +112,19 @@ class DanmakuConfig(BaseModel):
     blacklist_file: Optional[Path] = None
     forbidden_users_file: Optional[Path] = None
 
+    # 额外的「词表」文件：第三方开源词库（一般以 git submodule 放进 blacklist/ 目录，
+    # 直接引用别人的仓库，词表内容不进本仓库的历史）。
+    # 与 blacklist_file 不同：这些文件按**字面量**匹配（词表不是正则），
+    # 也不会被管理端的增删改写回。详见 BlacklistService.load_literal_patterns。
+    blacklist_extra_files: list[Path] = Field(default_factory=list)
+
     @property
     def resolved_blacklist_file(self) -> Path:
         return self.blacklist_file or self.asset_dir / "blacklist.txt"
+
+    @property
+    def resolved_blacklist_extra_files(self) -> list[Path]:
+        return list(self.blacklist_extra_files)
 
     @property
     def resolved_forbidden_users_file(self) -> Path:

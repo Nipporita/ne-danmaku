@@ -54,6 +54,72 @@ function resolveEmoteUrl(emoteUrl) {
   return emoteUrl.startsWith('/') ? emoteUrl : `/api/emoji/${emoteUrl}`
 }
 
+// 后端把消息文本里的行内元素（<face id="339" type="2" platform="llonebot"/> 之类）
+// 切成了 msg.inline（文字段 + 元素段）。这里把"文字 + 表情图"拼成一个 DOM 元素，
+// 交给 danmaku 库的 render 钩子渲染——和表情包走的是同一条路。
+// 不认识的元素、图挂了、房间关掉了外部表情 → 一律显示 █（后端 text_plain 也是这个字符）。
+const INLINE_PLACEHOLDER = '█'
+
+function buildInlineNode(msg, config, size, color) {
+  const makePlaceholder = () => {
+    const span = document.createElement('span')
+    span.textContent = INLINE_PLACEHOLDER
+    return span
+  }
+  const wrap = document.createElement('div')
+  wrap.style.cssText = [
+    'display:flex',
+    'align-items:center',
+    'gap:0.08em',
+    'white-space:pre',
+    `font-family:${config.font}`,
+    `font-size:${size}px`,
+    'font-weight:bold',
+    `color:${color}`,
+    'text-shadow:#000 1px 0px 1px, #000 0px 1px 1px, #000 0px -1px 1px, #000 -1px 0px 1px',
+    `opacity:${overlayOpacity.value ?? 1}`,
+  ].join(';')
+
+  for (const seg of msg.inline) {
+    if (seg.kind === 'text') {
+      if (!seg.text)
+        continue
+      const span = document.createElement('span')
+      span.textContent = seg.text // 用 textContent，绝不拼 HTML（弹幕是用户输入）
+      wrap.appendChild(span)
+      continue
+    }
+    const url = seg.url || seg.url_alt
+    if (seg.kind === 'face' && url && roomSettings.value.enable_external_emoji) {
+      const img = document.createElement('img')
+      img.src = resolveEmoteUrl(url)
+      img.alt = ''
+      img.style.cssText = `width:${size}px;height:${size}px;object-fit:contain;flex:0 0 auto`
+      let triedAlt = false
+      img.onerror = () => {
+        // 主地址挂了（腾讯那边 id 规则不同）→ 换备用地址再试一次，最后退回 █
+        if (!triedAlt && seg.url_alt && resolveEmoteUrl(seg.url_alt) !== img.src) {
+          triedAlt = true
+          img.src = resolveEmoteUrl(seg.url_alt)
+          return
+        }
+        img.replaceWith(makePlaceholder())
+      }
+      wrap.appendChild(img)
+      continue
+    }
+    wrap.appendChild(makePlaceholder())
+  }
+  // 一段都没有（理论上不会）→ 至少给个占位，别渲染出一个空弹幕
+  if (!wrap.childNodes.length)
+    wrap.appendChild(makePlaceholder())
+  return wrap
+}
+
+function hasInlineElements(msg) {
+  return Array.isArray(msg.inline) && msg.inline.some(seg => seg.kind !== 'text')
+}
+
 function applyRoomSettings(settings) {
   roomSettings.value = {
     overlay_opacity: Number(settings?.overlay_opacity ?? 100),
@@ -190,6 +256,9 @@ function sendMessage(msg) {
         opacity: overlayOpacity.value ?? 1,
       },
     }
+    // 文本里带行内元素（表情之类）→ 用 render 钩子画"文字 + 图片"
+    if (hasInlineElements(msg))
+      payload.render = () => buildInlineNode(msg, config, size, color)
     danmaku.value.emit(payload)
   }
   else if (type === 'emote' || type === 'multi_emote') {

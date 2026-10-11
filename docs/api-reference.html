@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nekocast Danmaku — 前后端接口文档</title>
+<style>
+  :root {
+    --bg: #0f172a; --surface: #1e293b; --border: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+    --green: #4ade80; --red: #f87171; --yellow: #fbbf24;
+    --purple: #a78bfa;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; line-height: 1.7; }
+  .sidebar {
+    position: fixed; top: 0; left: 0; width: 260px; height: 100vh;
+    background: var(--surface); border-right: 1px solid var(--border);
+    overflow-y: auto; padding: 24px 20px; z-index: 10;
+  }
+  .sidebar h2 { font-size: 1rem; color: var(--accent); margin-bottom: 16px; }
+  .sidebar a { display: block; color: var(--muted); text-decoration: none; padding: 4px 0; font-size: .88rem; }
+  .sidebar a:hover { color: var(--text); }
+  .sidebar .section { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .content { margin-left: 280px; padding: 32px 48px; max-width: 1000px; }
+  h1 { font-size: 2rem; color: var(--accent); margin-bottom: 8px; }
+  h2 { font-size: 1.4rem; margin-top: 40px; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.1rem; margin-top: 28px; margin-bottom: 8px; color: var(--accent); }
+  p, li { color: var(--muted); margin-bottom: 6px; }
+  strong { color: var(--text); }
+  code {
+    background: rgba(56,189,248,.12); color: var(--accent);
+    padding: 2px 6px; border-radius: 4px; font-size: .9em; font-family: 'JetBrains Mono', 'Cascadia Code', monospace;
+  }
+  pre {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; overflow-x: auto; font-size: .85rem; line-height: 1.5;
+    color: var(--text); margin: 12px 0;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: .9rem; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { color: var(--text); font-weight: 600; background: var(--surface); }
+  td { color: var(--muted); }
+  td code { font-size: .82em; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: .75rem; font-weight: 600; }
+  .badge-get { background: rgba(74,222,128,.18); color: var(--green); }
+  .badge-put { background: rgba(251,191,36,.18); color: var(--yellow); }
+  .badge-post { background: rgba(168,85,247,.18); color: var(--purple); }
+  .badge-ws { background: rgba(56,189,248,.18); color: var(--accent); }
+  .type-tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: .78rem; background: rgba(148,163,184,.15); color: var(--muted); margin-right: 4px; }
+  .note { background: rgba(251,191,36,.08); border-left: 3px solid var(--yellow); padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 12px 0; font-size: .9rem; }
+  .warn { background: rgba(248,113,113,.08); border-left: 3px solid var(--red); }
+</style>
+</head>
+<body>
+
+<nav class="sidebar">
+  <h2>Nekocast Danmaku</h2>
+  <a href="#overview">项目概述</a>
+  <a href="#config">配置参考</a>
+  <a href="#architecture">系统架构</a>
+  <div class="section">
+    <a href="#api-root">HTTP API</a>
+    <a href="#api-config">　公开配置</a>
+    <a href="#api-balance">　余额查询</a>
+    <a href="#api-rooms-settings">　房间设置</a>
+    <a href="#api-admin-config">　运行时配置</a>
+    <a href="#api-moderation">　审核管理</a>
+    <a href="#api-charge">　充值管理</a>
+    <a href="#api-emotes">　表情管理</a>
+  </div>
+  <div class="section">
+    <a href="#ws-overview">WebSocket</a>
+    <a href="#ws-client">　客户端连接</a>
+    <a href="#ws-upstream">　上游连接</a>
+    <a href="#ws-messages">　消息类型</a>
+    <a href="#ws-control">　控制消息</a>
+  </div>
+  <div class="section">
+    <a href="#frontend">前端组件</a>
+    <a href="#fe-danmaku-display">　DanmakuDisplay</a>
+    <a href="#fe-chat-client">　ChatClient</a>
+    <a href="#fe-sc-gift">　SC / Gift 显示</a>
+  </div>
+  <div class="section">
+    <a href="#game">游戏服务器集成</a>
+    <a href="#blocked-flag">　blocked 标记</a>
+  </div>
+</nav>
+
+<main class="content">
+
+<h1>Nekocast Danmaku — 前后端接口文档</h1>
+<p><strong>元火弹幕姬核心</strong> — 多源弹幕聚合网关，支持 Satori（QQ）、Bilibili 直播、OneBot v11 三种弹幕源，通过 WebSocket 向前端实时推送。</p>
+<p>版本：0.1.0 &nbsp;|&nbsp; 许可证：Apache-2.0</p>
+
+<!-- ============================================================ -->
+<h2 id="overview">1. 项目概述</h2>
+
+<p>Nekocast Danmaku 是一个独立的弹幕中继服务，从 Nekocast 主项目中提取。核心功能：</p>
+<ul>
+  <li><strong>多源聚合：</strong>Satori（gugugaga bot）、Bilibili 直播、OneBot v11（LLOneBot / NapCat）</li>
+  <li><strong>实时推送：</strong>WebSocket 向前端广播弹幕，支持多房间隔离</li>
+  <li><strong>文本指令：</strong><code>/sc</code> 发送 SuperChat、<code>/gift</code> 发送礼物</li>
+  <li><strong>虚拟货币：</strong>燕火（huo）用于 SC 消费、燕元（yuan）用于礼物消费</li>
+  <li><strong>内容过滤：</strong>正则黑名单 + 去重 + 用户封禁，标记 <code>blocked</code> 而非丢弃</li>
+  <li><strong>动态配置：</strong>config.json 修改后自动热加载（无需重启）</li>
+</ul>
+
+<pre><code>技术栈：
+后端 — Python 3.11+ / FastAPI / uvicorn / Pydantic / SQLAlchemy / watchdog
+前端 — Vue 3 / Vite / danmaku (weizhenye/danmaku) / pnpm
+弹幕源 — Satori Python SDK / blivedm / aiocqhttp</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="config">2. 配置参考 (config.json)</h2>
+
+<pre><code>{
+  "host": "0.0.0.0",              // 服务绑定地址
+  "port": 8000,                    // 服务端口
+  "danmaku": {
+    <strong>"max_message_length": 50,</strong>      // 弹幕字数上限（热加载）
+    <strong>"dedup_window": 5,</strong>              // 去重时间窗口/秒（热加载，≤0 禁用）
+    "upstream": { "token": "..." }, // 管理端鉴权 token（热加载）
+    "satori": {
+      "host": "127.0.0.1", "port": 5500,
+      "path": "/", "token": "...",
+      "group_map": { "QQ群号": "房间名" }           //（热加载）
+    },
+    "bilibili": {
+      "room_ids": { 直播间号: "房间名" },
+      "sess_data": "B站 SESSDATA"
+    },
+    "onebot_v11": {
+      "host": "127.0.0.1", "port": 5701,
+      "access_token": null, "secret": null,
+      "group_map": { "QQ群号": "房间名" }
+    },
+    <strong>"superchat": {
+      "default_cost": 10,          // 默认 SC 费用（热加载）
+      "duration_per_cost": 1,      // 每秒展示费用（热加载）
+      "min_duration": 10,          // 最短展示秒数（热加载）
+      "max_duration": 300          // 最长展示秒数（热加载）
+    },</strong>
+    <strong>"gift": {
+      "default_cost": 1,           // 礼物默认单价（热加载）
+      "items": {                   // 礼物列表（热加载）
+        "onigiri": { "cost": 1, "aliases": ["饭团"], "image_url": "/assets/gifts/饭团.png" }
+      }
+    },</strong>
+    <strong>"cash": {
+      "enabled": true,             // 是否启用现金系统（热加载）
+      "initial_huo": 0.0,          // 初始燕火（热加载）
+      "reward_huo_per_message": 0.0, // 每条消息奖励（热加载）
+      "reward_huo_interval_seconds": 60,  // 奖励间隔秒数（热加载）
+      "reward_huo_per_interval": 1.0,    // 间隔奖励量（热加载）
+      "initial_yuan": 100.0,       // 初始燕元（热加载）
+      "secret_key": "...",         // 礼品码加密密钥（需重启）
+      "db_path": "cash.db"
+    },</strong>
+    "room_db_path": "room.db",
+    "emote_alias_token": "...",
+    "asset_dir": "assets_danmaku",
+    "blacklists": []
+  }
+}</code></pre>
+
+<p><span class="badge" style="background:rgba(74,222,128,.18);color:var(--green)">热加载</span> 标记的字段修改后自动生效，无需重启。也可通过 API 运行时更新。</p>
+
+<!-- ============================================================ -->
+<h2 id="architecture">3. 系统架构</h2>
+
+<pre><code>
+  Satori / Bilibili / OneBot v11
+      │  (弹幕事件)
+      ▼
+  ┌──────────────────────┐
+  │  Nekocast Danmaku    │
+  │  (FastAPI + uvicorn) │
+  │                      │
+  │  • DanmakuBuilder    │  ← 消息构造（/sc, /gift 解析）
+  │  • BlacklistService  │  ← 黑名单检查（标记 blocked）
+  │  • DanmakuFilter     │  ← 去重 + 过滤
+  │  • RoomCashSystem    │  ← 虚拟货币
+  │  • ConfigReloader    │  ← 配置热加载
+  └──────┬───────────────┘
+         │ WebSocket (JSON)
+         ▼
+  ┌──────────────────────┐
+  │  前端 / 游戏服务器    │
+  │                      │
+  │  • DanmakuDisplay    │  ← 观众端弹幕层
+  │  • ChatClient        │  ← 管理端控制台
+  │  • 游戏客户端         │  ← 第三方（读取 blocked 消息）
+  └──────────────────────┘
+</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="api-root">4. HTTP API</h2>
+
+<p>所有 API 的基础路径：<code>/api/danmaku/v1</code></p>
+
+<!-- ── 公开配置 ── -->
+<h3 id="api-config">4.1 公开配置</h3>
+
+<table>
+<tr><th>方法</th><th>路径</th><th>鉴权</th><th>说明</th></tr>
+<tr>
+  <td><span class="badge badge-get">GET</span></td>
+  <td><code>/</code></td>
+  <td>无</td>
+  <td>健康检查</td>
+</tr>
+<tr>
+  <td><span class="badge badge-get">GET</span></td>
+  <td><code>/config</code></td>
+  <td>无</td>
+  <td>公开配置（前端读取字数上限等）</td>
+</tr>
+</table>
+
+<pre><code>// GET /api/danmaku/v1/config 响应
+{
+  "max_message_length": 50,
+  "config_version": 3
+}</code></pre>
+
+<!-- ── 余额 ── -->
+<h3 id="api-balance">4.2 余额查询（无需鉴权）</h3>
+
+<table>
+<tr><th>方法</th><th>路径</th><th>参数</th><th>说明</th></tr>
+<tr>
+  <td><span class="badge badge-get">GET</span></td>
+  <td><code>/balance</code></td>
+  <td><code>?username=</code></td>
+  <td>按用户名查余额</td>
+</tr>
+<tr>
+  <td><span class="badge badge-get">GET</span></td>
+  <td><code>/balance_by_id</code></td>
+  <td><code>?user_id=</code></td>
+  <td>按用户 ID 查余额</td>
+</tr>
+</table>
+
+<!-- ── 房间设置 ── -->
+<h3 id="api-rooms-settings">4.3 房间设置（需 admin token）</h3>
+
+<table>
+<tr><th>方法</th><th>路径</th><th>说明</th></tr>
+<tr>
+  <td><span class="badge badge-get">GET</span></td>
+  <td><code>/admin/rooms/{group}/settings?token=</code></td>
+  <td>读取房间设置</td>
+</tr>
+<tr>
+  <td><span class="badge badge-put">PUT</span></td>
+  <td><code>/admin/rooms/{group}/settings?token=</code></td>
+  <td>更新房间设置</td>
+</tr>
+<tr>
+  <td><span class="badge badge-post">POST</span></td>
+  <td><code>/admin/rooms/{group}/clear?token=</code></td>
+  <td>清空房间弹幕/SC/礼物覆盖层</td>
+</tr>
+</table>
+
+<pre><code>// 房间设置 JSON 结构
+{
+  "overlay_opacity": 100.0,        // 弹幕透明度 0-100
+  "enable_external_emoji": true,   // 外部表情（Satori/OneBot）
+  "enable_internal_emoji": true,   // 内部表情（【表情】文本）
+  "enable_superchat": true,        // SuperChat 显示
+  "enable_gift": true,             // 礼物显示
+  "bind_position": true            // 允许置顶/置底定位
+}</code></pre>
+
+<!-- ── 运行时配置 ── -->
+<h3 id="api-admin-config">4.4 运行时配置管理（需 admin token）</h3>
+
+<table>
+<tr><th>方法</th><th>路径</th><th>说明</th></tr>
+<tr>
+  <td><span class="badge badge-get">GET</span></td>
+  <td><code>/admin/config?token=</code></td>
+  <td>查看当前运行配置（脱敏）</td>
+</tr>
+<tr>
+  <td><span class="badge badge-put">PUT</span></td>
+  <td><code>/admin/config?token=&amp;persist=true</code></td>
+  <td>运行时更新可热加载字段</td>
+</tr>
+</table>
+
+<pre><code>// PUT /api/danmaku/v1/admin/config?token=xxx
+// 只传要更新的字段（dotted path），persist=true 写回文件
+{
+  "max_message_length": 100,
+  "superchat": { "default_cost": 5.0 },
+  "cash.initial_huo": 200.0
+}
+// 响应
+{ "ok": true, "changes": ["max_message_length", "superchat", "cash.initial_huo"], "persisted": true }</code></pre>
+
+<!-- ── 审核 ── -->
+<h3 id="api-moderation">4.5 审核管理（需 admin token）</h3>
+
+<table>
+<tr><th>方法</th><th>路径</th><th>参数</th><th>说明</th></tr>
+<tr><td><span class="badge badge-post">POST</span></td><td><code>/admin/rooms/append_pattern</code></td><td><code>?pattern=&amp;hard=</code></td><td>添加黑名单正则</td></tr>
+<tr><td><span class="badge badge-post">POST</span></td><td><code>/admin/rooms/remove_pattern</code></td><td><code>?pattern=&amp;hard=</code></td><td>删除黑名单正则</td></tr>
+<tr><td><span class="badge badge-get">GET</span></td><td><code>/admin/rooms/list_patterns</code></td><td></td><td>列出所有黑名单正则</td></tr>
+<tr><td><span class="badge badge-post">POST</span></td><td><code>/admin/rooms/ban_user</code></td><td><code>?user_id=</code></td><td>封禁用户</td></tr>
+<tr><td><span class="badge badge-post">POST</span></td><td><code>/admin/rooms/unban_user</code></td><td><code>?user_id=</code></td><td>解封用户</td></tr>
+<tr><td><span class="badge badge-get">GET</span></td><td><code>/admin/rooms/list_banned_users</code></td><td></td><td>列出所有封禁用户</td></tr>
+</table>
+
+<!-- ── 充值 ── -->
+<h3 id="api-charge">4.6 充值管理（需 admin token）</h3>
+
+<table>
+<tr><th>方法</th><th>路径</th><th>说明</th></tr>
+<tr><td><span class="badge badge-get">GET</span></td><td><code>/admin/rooms/{group}/users?token=</code></td><td>列出房间用户及余额</td></tr>
+<tr><td><span class="badge badge-post">POST</span></td><td><code>/admin/rooms/{group}/charge/{user_id}?token=</code></td><td>为指定用户充值（body: {currency, amount}）</td></tr>
+<tr><td><span class="badge badge-post">POST</span></td><td><code>/admin/rooms/{group}/charge_all?token=</code></td><td>为全房间用户充值</td></tr>
+</table>
+
+<!-- ── 表情 ── -->
+<h3 id="api-emotes">4.7 表情管理</h3>
+
+<table>
+<tr><th>方法</th><th>路径</th><th>鉴权</th><th>说明</th></tr>
+<tr><td><span class="badge badge-get">GET</span></td><td><code>/api/danmaku/v1/emotes</code></td><td>无</td><td>列出可用表情包</td></tr>
+<tr><td><span class="badge badge-get">GET</span></td><td><code>/api/emoji/{key}</code></td><td>无</td><td>Emoji 缓存代理</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="ws-overview">5. WebSocket 协议</h2>
+
+<h3 id="ws-client">5.1 客户端连接（观众端）</h3>
+<table>
+<tr><td>端点</td><td><code>ws://host:port/api/danmaku/v1/danmaku/{group}</code></td></tr>
+<tr><td>方向</td><td>服务器 → 客户端（只推送）</td></tr>
+<tr><td>鉴权</td><td>无需 token</td></tr>
+</table>
+<p>客户端发送的任何消息都会被忽略。服务器单向推送弹幕 JSON。</p>
+
+<h3 id="ws-upstream">5.2 上游连接（管理端）</h3>
+<table>
+<tr><td>端点</td><td><code>ws://host:port/api/danmaku/v1/upstream?token={token}</code></td></tr>
+<tr><td>方向</td><td>双向</td></tr>
+<tr><td>鉴权</td><td>需要 <code>config.danmaku.upstream.token</code></td></tr>
+</table>
+<p>上游发送弹幕数据包到服务器，服务器处理后广播到指定房间的所有客户端。</p>
+
+<!-- ── 消息格式 ── -->
+<h3 id="ws-messages">5.3 弹幕消息类型（服务器 → 客户端 JSON）</h3>
+
+<p>所有消息继承 <code>DanmakuBase</code> 公共字段：</p>
+<pre><code>{
+  "type": "消息类型",
+  "senderId": "发送者唯一ID | null",
+  "sender": "发送者昵称 | null",
+  "is_special": false,
+  <strong>"blocked": false</strong>         // 是否被黑名单/去重标记
+}</code></pre>
+
+<!-- plain -->
+<h4>PlainDanmakuMessage — 普通弹幕</h4>
+<pre><code>{
+  "type": "plain",
+  "text": "弹幕文本内容",
+  "color": "#ffffff | null",       // CSS 颜色
+  "size": 40 | null,               // 字号 px
+  "position": "scroll",            // "scroll" | "top" | "bottom"
+  "senderId": "...", "sender": "...",
+  "is_special": false, "blocked": false
+}</code></pre>
+
+<!-- emote -->
+<h4>EmoteMessage — 单表情</h4>
+<pre><code>{
+  "type": "emote",
+  "emote_url": "/api/emoji/xxx 或 https://...",
+  "senderId": "...", "sender": "...",
+  "is_special": false, "blocked": false
+}</code></pre>
+
+<!-- multi_emote -->
+<h4>MultiEmoteMessage — 多表情（内置表情解析）</h4>
+<pre><code>{
+  "type": "multi_emote",
+  "emote_urls": ["url1", "url2", ...],
+  "senderId": "...", "sender": "...",
+  "is_special": false, "blocked": false
+}</code></pre>
+
+<!-- superchat -->
+<h4>SuperChatMessage — 醒目留言</h4>
+<pre><code>{
+  "type": "superchat",
+  "text": "SC 文本内容",
+  "cost": 10.0,                    // 花费的燕火
+  "duration": 10,                  // 展示时长（秒）
+  "avatar_url": "/api/emoji/xxx | null",
+  "senderId": "...", "sender": "...",
+  "is_special": false, "blocked": false
+}</code></pre>
+
+<!-- gift -->
+<h4>GiftMessage — 礼物</h4>
+<pre><code>{
+  "type": "gift",
+  "gift_name": "onigiri",          // 礼物名称
+  "quantity": 1,                   // 数量
+  "cost": 1.0,                     // 总价（燕元）
+  "image_url": "/assets/gifts/饭团.png | null",
+  "avatar_url": "/api/emoji/xxx | null",
+  "senderId": "...", "sender": "...",
+  "is_special": false, "blocked": false
+}</code></pre>
+
+<!-- ── 控制消息 ── -->
+<h3 id="ws-control">5.4 控制消息（服务器 → 客户端）</h3>
+
+<pre><code>// 房间设置同步
+{ "type": "settings", "settings": { "overlay_opacity": 100.0, ... } }
+
+// 清空指令
+{ "type": "control", "action": "clear_all" }</code></pre>
+
+<h3>5.5 上游发送格式（管理端 → 服务器）</h3>
+
+<pre><code>// 格式 A：完整带 type（Pydantic 直接解析）
+{
+  "group": "房间名",
+  "danmaku": {
+    "type": "plain",
+    "text": "弹幕内容",
+    "color": "#ffffff",
+    "sender": "元火子"
+  }
+}
+
+// 格式 B：扁平格式（自动解析 /sc、/gift、颜色、位置命令）
+{
+  "group": "房间名",
+  "danmaku": {
+    "text": "/sc 10 这是一条 SC",   // 自动识别 /sc 前缀
+    "sender": "元火子"
+  }
+}
+
+// 格式 B 中的文本指令：
+//   /sc [cost] 文本         → SuperChatMessage
+//   /gift 礼物名 [数量]      → GiftMessage
+//   /置顶 文本 或 /置底 文本 → position: "top"/"bottom"
+//   #ff0000 文本            → color: "#ff0000"</code></pre>
+
+<p>上游发送的每条弹幕都会被自动标记 <code>"is_special": true</code> 并追加 👑 标识。</p>
+
+<!-- ============================================================ -->
+<h2 id="frontend">6. 前端组件</h2>
+
+<h3 id="fe-danmaku-display">6.1 DanmakuDisplay（观众端弹幕层）</h3>
+<table>
+<tr><td>路由</td><td><code>/danmaku/{房间名}</code></td></tr>
+<tr><td>用途</td><td>OBS 直播叠加层，全屏透明背景</td></tr>
+<tr><td>渲染库</td><td><code>danmaku</code> (weizhenye/danmaku v2.0.9)，DOM 引擎</td></tr>
+</table>
+<p>处理流程：</p>
+<pre><code>WebSocket onmessage
+  → type="settings" → 更新透明度/开关
+  → type="control"  → clear_all（销毁并重建 danmaku 实例）
+  → 其他            → sendMessage(data)
+      → type="plain"        → danmaku.emit({mode, text, style})
+      → type="emote"/"multi" → AssetManager 加载图片 → danmaku.emit({render: img})
+      → type="superchat"    → SuperChatDisplay 组件
+      → type="gift"         → GiftDisplay 组件
+      <strong>→ msg.blocked === true → 跳过渲染</strong></code></pre>
+
+<h3 id="fe-chat-client">6.2 ChatClient（管理端控制台）</h3>
+<table>
+<tr><td>路由</td><td><code>/danmaku/chat/{房间名}?key={token}</code></td></tr>
+<tr><td>用途</td><td>发送弹幕、管理房间设置、审核、充值</td></tr>
+<tr><td>连接</td><td>同时连接客户端 WS + 上游 WS（需要 token）</td></tr>
+</table>
+<p>功能模块：</p>
+<ul>
+  <li><strong>弹幕发送：</strong>输入框支持文本指令（/sc、/gift、颜色、位置）</li>
+  <li><strong>房间设置：</strong>透明度滑块、表情/SC/礼物开关、置顶置底开关</li>
+  <li><strong>充值管理：</strong>按用户充值燕火/燕元，全房间充值</li>
+  <li><strong>审核面板：</strong>封禁/解封用户，管理黑名单正则，正则测试</li>
+  <li><strong>Blocked 标记：</strong>收到 <code>blocked: true</code> 的消息显示红色 <code>BLOCKED</code> 徽章</li>
+</ul>
+
+<h3 id="fe-sc-gift">6.3 SuperChat / Gift 显示组件</h3>
+<p><code>SuperChatDisplay.vue</code> — 固定位置叠加层，按金额排序显示 SC 卡片，duration 秒后自动移除。</p>
+<p><code>GiftDisplay.vue</code> — 礼物动画叠加层，显示礼物图片 × 数量 + 总价。</p>
+<p>两个组件均使用 <code>uuid</code> 库生成唯一 ID（替代 <code>crypto.randomUUID()</code> 以兼容非 HTTPS 环境）。</p>
+
+<!-- ============================================================ -->
+<h2 id="game">7. 游戏服务器集成</h2>
+
+<h3 id="blocked-flag">7.1 <code>blocked</code> 标记机制</h3>
+
+<div class="note">
+  <p><strong>核心原则：</strong>后端绝不丢弃任何消息。即使消息命中黑名单、发送者被封禁、或触发去重，消息都会被完整广播到所有 WebSocket 客户端。后端仅在消息上设置 <code>"blocked": true</code> 标记。</p>
+</div>
+
+<table>
+<tr><th>触发条件</th><th>文本处理</th><th>blocked</th><th>消息类型</th></tr>
+<tr>
+  <td>发送者 ID 在封禁列表</td>
+  <td><strong>保留原文</strong></td>
+  <td><code>true</code></td>
+  <td>所有类型</td>
+</tr>
+<tr>
+  <td>文本命中黑名单正则</td>
+  <td><strong>保留原文</strong></td>
+  <td><code>true</code></td>
+  <td>PlainDanmaku</td>
+</tr>
+<tr>
+  <td>SC 文本命中黑名单</td>
+  <td>打码（<code>***</code>）</td>
+  <td><code>false</code></td>
+  <td>SuperChat</td>
+</tr>
+<tr>
+  <td>SC/Gift 昵称命中黑名单</td>
+  <td>打码（<code>***</code>）</td>
+  <td><code>false</code></td>
+  <td>SuperChat / Gift</td>
+</tr>
+<tr>
+  <td>短时重复弹幕（去重）</td>
+  <td><strong>保留原文</strong></td>
+  <td><code>true</code></td>
+  <td>PlainDanmaku</td>
+</tr>
+<tr>
+  <td>文本超过字数上限</td>
+  <td>截断到 max_message_length</td>
+  <td><code>false</code></td>
+  <td>PlainDanmaku / SC</td>
+</tr>
+</table>
+
+<div class="note">
+  <p><strong>游戏服务器集成指南：</strong>游戏服务器应连接客户端 WebSocket，接收所有消息（包括 <code>blocked: true</code> 的）。游戏逻辑不受 <code>blocked</code> 影响——该标记仅供弹幕展示层使用。原始文本完整保留，游戏指令和玩家消息不受损。</p>
+  <p>游戏服务器应建议使用 WS URL：<code>ws://host:port/api/danmaku/v1/danmaku/{游戏房间名}</code></p>
+</div>
+
+<h3>7.2 轻量模拟服务器 (danmaku-server)</h3>
+<p>位于 <code>danmaku-app/danmaku-server/server.py</code>，基于 Python tkinter + websockets，用于游戏开发测试。发送的消息格式应兼容实际后端。详见 <code>danmaku-app</code> 项目。</p>
+
+<!-- ============================================================ -->
+<h2 style="margin-top: 48px;">附录：热加载字段完整列表</h2>
+
+<table>
+<tr><th>字段路径</th><th>说明</th><th>通知消费者</th></tr>
+<tr><td><code>max_message_length</code></td><td>弹幕字数上限</td><td>ConnectionManager</td></tr>
+<tr><td><code>dedup_window</code></td><td>去重时间窗口（秒）</td><td>DanmakuFilter</td></tr>
+<tr><td><code>upstream.token</code></td><td>管理端鉴权 token</td><td>（闭包自动感知）</td></tr>
+<tr><td><code>superchat</code></td><td>SC 定价整棵子树</td><td>configure_parsing_rules()</td></tr>
+<tr><td><code>gift</code></td><td>礼物配置整棵子树</td><td>configure_parsing_rules()</td></tr>
+<tr><td><code>cash.enabled</code></td><td>现金系统开关</td><td>RoomCashSystem.update_policy()</td></tr>
+<tr><td><code>cash.initial_huo</code></td><td>初始燕火</td><td>RoomCashSystem.update_policy()</td></tr>
+<tr><td><code>cash.reward_huo_per_message</code></td><td>每条消息燕火奖励</td><td>RoomCashSystem.update_policy()</td></tr>
+<tr><td><code>cash.reward_huo_interval_seconds</code></td><td>燕火奖励间隔</td><td>RoomCashSystem.update_policy()</td></tr>
+<tr><td><code>cash.reward_huo_per_interval</code></td><td>燕火间隔奖励量</td><td>RoomCashSystem.update_policy()</td></tr>
+<tr><td><code>cash.initial_yuan</code></td><td>初始燕元</td><td>RoomCashSystem.update_policy()</td></tr>
+<tr><td><code>cash.reward_yuan_per_message</code></td><td>每条消息燕元奖励</td><td>RoomCashSystem.update_policy()</td></tr>
+<tr><td><code>cash.reward_yuan_interval_seconds</code></td><td>燕元奖励间隔</td><td>RoomCashSystem.update_policy()</td></tr>
+<tr><td><code>cash.reward_yuan_per_interval</code></td><td>燕元间隔奖励量</td><td>RoomCashSystem.update_policy()</td></tr>
+<tr><td><code>satori.group_map</code></td><td>QQ群→房间映射</td><td>（dict 原地突变）</td></tr>
+</table>
+
+</main>
+</body>
+</html>

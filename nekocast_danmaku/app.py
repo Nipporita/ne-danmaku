@@ -187,7 +187,10 @@ async def startup_danmaku(app: FastAPI, config: AppConfig) -> None:
     
     # 延迟导入，避免启动阶段的循环依赖
     
-    blacklist = BlacklistService()
+    # 第三方词表（submodule 引入的开源词库）以字面量方式追加进来
+    blacklist = BlacklistService(
+        extra_pattern_files=config.danmaku.resolved_blacklist_extra_files
+    )
     blacklist.reload(
         config.danmaku.resolved_blacklist_file,
         config.danmaku.resolved_forbidden_users_file,
@@ -197,6 +200,7 @@ async def startup_danmaku(app: FastAPI, config: AppConfig) -> None:
         blacklist,
         config.danmaku.resolved_blacklist_file,
         config.danmaku.resolved_forbidden_users_file,
+        config.danmaku.resolved_blacklist_extra_files,
     )
 
     # ── 配置热加载 ──────────────────────────────────

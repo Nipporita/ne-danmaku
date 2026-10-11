@@ -23,6 +23,8 @@ from ..config import SatoriConfig
 # Satori 的配置结构
 
 from .models import ConnectionManager
+from .game_events import member_is_admin, recall_frame, reaction_frame
+from .event_probe import mark_handled, record_satori_event
 from .cash_system import RoomCashSystem, GiftCodeFormatError, GiftCodeRedeemError
 from .danmaku_class.danmaku_builder import DanmakuBuilder
 from .danmaku_class.danmaku_message import EmoteMessage, GiftMessage, PlainDanmakuMessage, SuperChatMessage
@@ -40,6 +42,89 @@ ROOM_ID_PATTERN = re.compile(
     r"^\s*(.+?)\s*查询余额\s*$",
     re.IGNORECASE,
 )
+
+# =========================
+# 游戏侧事件帧（撤回 / 贴表情）与身份辅助
+# =========================
+# 线格式见 game_events.py；这里只负责把 Satori 的事件对象适配过去。
+
+
+def _sid(obj) -> str:
+    value = getattr(obj, "id", None)
+    return "" if value is None else str(value)
+
+
+def build_recall_frame(event) -> dict:
+    """群消息被撤回 → 事件帧"""
+    return recall_frame(
+        _sid(getattr(event, "message", None)),
+        sender_id=_sid(getattr(event, "user", None)),
+        operator_id=_sid(getattr(event, "operator", None)),
+        channel_id=_sid(getattr(event, "channel", None)),
+    )
+
+
+def build_reaction_frame(event, action="add") -> dict:
+    """有人给某条消息贴了（或取消了）表情 → 事件帧"""
+    return reaction_frame(
+        _sid(getattr(event, "message", None)),
+        sender_id=_sid(getattr(event, "user", None)),
+        emoji=_sid(getattr(event, "emoji", None)),
+        channel_id=_sid(getattr(event, "channel", None)),
+        action=action,
+    )
+
+
+async def forward_recall(config, connection_manager, event) -> bool:
+    """撤回事件 → 广播给对应房间的大屏（返回是否真的推出去了）"""
+    frame = build_recall_frame(event)
+    danmaku_channel = config.group_map.get(frame["channel_id"])
+    if danmaku_channel is None:
+        logger.debug("撤回事件来自未配置频道，忽略: {}", frame)
+        return False
+    if not frame["message_id"]:
+        return False
+    logger.info(
+        "撤回：频道 {}, 消息 {}, 作者 {}, 操作者 {}",
+        danmaku_channel,
+        frame["message_id"],
+        frame["sender_id"],
+        frame["operator_id"],
+    )
+    await connection_manager.broadcast_frame(danmaku_channel, frame)
+    return True
+
+
+async def forward_reaction(config, connection_manager, event, member_admin=None, action="add") -> bool:
+    """贴表情 / 取消表情事件 → 广播给对应房间的大屏（游戏侧用作答题审核）
+
+    ``action="remove"`` 表示主持人把表情取消了 —— 游戏侧理解为「取消审核」。
+
+    ``member_admin`` 是「成员 id → 是否群主/管理员」的缓存（on_ready 时填充）。
+    贴上它很有必要：贴表情事件本身不带角色信息，而游戏侧要靠角色认定「谁有资格审核」——
+    主持人如果只在控制面板上操作、从没在群里发过言，前端就还没把他绑定成主持人。
+    """
+    frame = build_reaction_frame(event, action=action)
+    danmaku_channel = config.group_map.get(frame["channel_id"])
+    if danmaku_channel is None:
+        logger.debug("表情事件来自未配置频道，忽略: {}", frame)
+        return False
+    if not frame["message_id"]:
+        return False
+    if member_admin is not None:
+        frame["is_admin"] = bool(member_admin.get(frame["sender_id"], False))
+    logger.info(
+        "表情事件：{}，频道 {}, 消息 {}, 用户 {}, 表情 {}, 管理员 {}",
+        "取消" if frame["action"] == "remove" else "贴",
+        danmaku_channel,
+        frame["message_id"],
+        frame["sender_id"],
+        frame["emoji"],
+        frame.get("is_admin"),
+    )
+    await connection_manager.broadcast_frame(danmaku_channel, frame)
+    return True
+
 
 # =========================
 # 全局状态（确保只启动一个客户端）
@@ -73,6 +158,15 @@ async def start_satori_client(
         logger.warning("Satori 客户端已经在运行")
         return satori_task
 
+    # 事件探针：告诉它哪些类型是本客户端真正处理的（其余类型出现即"上游推了但没处理"）
+    mark_handled(
+        str(EventType.MESSAGE_CREATED.value),
+        str(EventType.MESSAGE_DELETED.value),
+        str(EventType.REACTION_ADDED.value),
+        str(EventType.REACTION_REMOVED.value),
+        str(EventType.GUILD_MEMBER_ADDED.value),
+    )
+
     # 创建 Launart 生命周期管理器
     launart = Launart()
 
@@ -91,6 +185,7 @@ async def start_satori_client(
     # =========================
     
     users = set()  # 用于记录已获取过的用户 ID，避免重复日志
+    member_admin: dict = {}  # 成员 id -> 是否群主/管理员（贴表情事件不带角色，靠这里的缓存补）
 
     @client.register_on(EventType.MESSAGE_CREATED)
     async def handle_message(account: Account, event: MessageEvent):
@@ -336,19 +431,51 @@ async def start_satori_client(
                     )
                     danmaku.avatar_url = avatar_url
         
+        # 广播前补上上游消息 ID 与成员角色：
+        #   message_id —— 撤回 / 贴表情事件要按它对齐"大屏上的这个答案"
+        #   is_admin   —— 群主 / 管理员，游戏前端据此自动认定主持人
+        # 注意要放在余额不足降级（to_plain 会重建对象）之后，否则会被丢掉
+        danmaku.message_id = _sid(event.message) or None
+        danmaku.is_admin = member_is_admin(event.member)
+
         # 将弹幕广播到对应分组的所有连接
         await connection_manager.broadcast_to_group(
             danmaku_channel,
             danmaku,
         )
-    
+
+    @client.register_on(EventType.MESSAGE_DELETED)
+    async def handle_message_deleted(account: Account, event):
+        # 群消息被撤回（Satori message-deleted）→ 推给大屏，由游戏前端决定怎么处理
+        _ = account
+        await forward_recall(config, connection_manager, event)
+
     @client.register_on(EventType.REACTION_ADDED)
     async def handle_message_reaction(account: Account, event):
-        # logger.debug(
-        #     "{}: {}", type(event), event
-        # )
-        _ = (account, event)
+        # 有人给某条消息贴了表情（Satori reaction-added）→ 推给大屏
+        # 游戏侧用它做「答题审核」：主持人给答案贴任意表情 = 这条答案通过
+        _ = account
+        await forward_reaction(config, connection_manager, event, member_admin, action="add")
+
+    @client.register_on(EventType.REACTION_REMOVED)
+    async def handle_message_reaction_removed(account: Account, event):
+        # 表情被取消了（Satori reaction-removed）→ 推给大屏
+        # 游戏侧理解为「取消审核」：QQ 里贴的表情可以撤掉，撤掉就是主持人反悔了
+        _ = account
+        await forward_reaction(config, connection_manager, event, member_admin, action="remove")
     
+    # =========================
+    # 事件探针
+    # =========================
+    # 兜底登记上游推来的每一类事件：彩排时用
+    #   GET /api/danmaku/v1/admin/event-probe?token=<upstream.token>
+    # 就能确认 message-deleted / reaction-added 到底有没有来
+    async def _event_probe(account: Account, event):
+        _ = account
+        record_satori_event(event)
+
+    client.register(_event_probe)
+
     # =========================
     # 获取群组列表
     # =========================
@@ -377,6 +504,9 @@ async def start_satori_client(
                         member_user.name
                     )
                     users.add(member_user.id)
+                    # 顺手缓存群主/管理员身份：贴表情事件本身不带角色，
+                    # 游戏侧要靠它判断"这个贴表情的人有没有资格审核"
+                    member_admin[member_user.id] = member_is_admin(user)
             else:
                 logger.debug(
                     "获取到未配置的频道，频道 ID: {}, 频道名称: {}",

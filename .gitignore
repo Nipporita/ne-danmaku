@@ -10,3 +10,6 @@ node_modules/
 
 /assets_danmaku/assets/emotes
 /assets_danmaku/emotes
+
+# QQ 官方机器人桥接器的私密配置（含 AppSecret）
+bridges/qqbot_bridge.json

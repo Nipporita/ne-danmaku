@@ -256,6 +256,23 @@ def create_router(config: DanmakuConfig) -> APIRouter:
         banned_users = bl.list_forbidden_users()
         return {"ok": True, "banned_users": banned_users}
 
+    # ── 事件探针（彩排用） ──────────────────────
+
+    @router.get("/admin/event-probe")
+    async def event_probe(token: str = Query(None), reset: bool = Query(False)):
+        """看上游到底推了哪些事件类型。
+
+        ③（撤回）④（贴表情审核）依赖上游真的推 message-deleted / reaction-added，
+        彩排时打开这个接口就能确认它们来没来；``handled: false`` 的类型是
+        "上游推了但后端没处理"。
+        """
+        validate_admin_token(token)
+        from .event_probe import reset as probe_reset, snapshot as probe_snapshot
+
+        if reset:
+            probe_reset()
+        return {"ok": True, **probe_snapshot()}
+
     @router.websocket("/upstream")
     async def upstream_websocket(websocket: WebSocket, token: str = Query(None)):
         """上游弹幕 WebSocket

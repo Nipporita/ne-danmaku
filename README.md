@@ -129,4 +129,82 @@ uv run main.py
 服务会在对应的端口启动 HTTP 服务
 
 - `/danmaku/房间名` 为弹幕网页，管理、咕咕嘎嘎、B 站弹幕均会显示在此页面，可以直接添加到 OBS
+
+## 屏蔽词库
+
+两级来源，配置里分开写：
+
+| 配置项 | 内容 | 匹配方式 |
+| --- | --- | --- |
+| `blacklist_file` | 自己的规则（默认 `assets_danmaku/blacklist.txt`） | **正则**，管理端可以现场增删并写回该文件 |
+| `blacklist_extra_files` | 第三方开源词库（见下） | **字面量**（词表不是正则），只读，不会被写回 |
+
+### 第三方词库（git submodule）
+
+`blacklist/` 下直接引用了别人的仓库，词表内容**不进本仓库的历史**（只记录 commit 指针）：
+
+| 目录 | 仓库 | 许可 |
+| --- | --- | --- |
+| `blacklist/Sensitive-lexicon` | <https://github.com/Konsheng/Sensitive-lexicon> | MIT |
+| `blacklist/sensitive-stop-words` | <https://github.com/fwwdn/sensitive-stop-words> | Apache-2.0 |
+
+首次克隆、或换机器后要拉取词库：
+
+```bash
+git submodule update --init --recursive
+# 想更新到上游最新
+git submodule update --remote blacklist/Sensitive-lexicon blacklist/sensitive-stop-words
+```
+
+词表文件改完/更新完，watchdog 会自动重载（额外词表的目录也在监视范围内），不必重启。
+
+### 为什么额外词表按「字面量」处理
+
+这些词库是给论坛、评论区用的通用文本审核词表。直接当正则用有两个坑：词条里的 `*`、`(`
+会变成通配符；单字词条（"草""操"这类）会把大量正常弹幕也标成 `blocked`。
+所以加载时会：转义成正则字面量、丢弃长度 < 2 的词、与已有规则去重。
+
+### 误伤体检
+
+引第三方词库必然有误伤（例如某个词库里有 `早苗`，本意匹配"高市早苗"，
+但东方活动上"东风谷早苗"才是常态）。体检脚本按**实际生效的规则集**跑一遍：
+
+```bash
+python tools/check_blacklist.py          # 需要 .venv 里跑；会指出"这条来自哪个文件"
+```
+
+被标 `blocked` 只影响大屏显示（不渲染），**不影响游戏计票/答案**；
+但主持人指令、正常弹幕看不见会很难受——把太吵的整份词表从
+`blacklist_extra_files` 里去掉即可。
+
+## 行内元素（`<face .../>` 之类）
+
+上游会把"不是纯文字"的段塞进消息文本里，形如：
+
+```
+哈哈哈哈<face id="339" type="2" platform="llonebot"/>好活
+```
+
+后端（`nekocast_danmaku/danmaku/inline_elements.py`）在**过滤阶段**为每条消息解析它们
+（所有上游共用这一步），并给帧补三个字段：
+
+| 字段 | 内容 |
+| --- | --- |
+| `inline` | 切好的段：`[{"kind":"text","text":"哈哈哈哈"}, {"kind":"face","id":"339","type":"2","url":"…","url_alt":"…"}]` |
+| `text_plain` | 元素整体替换成 `█` 之后的纯文本（给游戏这类只认纯文本的消费者；**整条只有元素时就是一个 `█`，照样算数**） |
+
+没有行内元素的消息**不补**这两个字段（帧保持尽量小）。
+`platform` 之类的附加属性**不做处理**（只出现在 `attrs` / `raw` 里），渲染只认 `id` 与 `type`。
+
+**表情图地址**：QQ 系统表情在腾讯老地址 `qzonestyle.gtimg.cn/qzone/em/e{id}.gif`，
+其中"会动的"那种（`type="2"` 或 id ≥ 222）编号是 `10000+id`（实测 e419 是 404、e10419 才是 200）；
+QQ"回应"那类标准 emoji 的 id 直接是 Unicode 码点（128077 = 👍，和贴表情那套一致），走 Twemoji。
+每个 face 段都给了 `url` 与 `url_alt` 两个地址，前端一个挂了换另一个，最后退回 `█`。
+
+**前端**（`frontend/src/components/DanmakuDisplay.vue`）：带行内元素的 `plain` 弹幕
+用 `danmaku` 库的 `render` 钩子画成"文字 + 图片"的 DOM（和表情包走同一条路；文字用
+`textContent` 写入，绝不拼 HTML）。房间关掉外部表情、或图片加载失败 → 显示 `█`。
+
+改完前端记得重新构建（后端挂的是 `frontend/dist`）：`cd frontend && pnpm build`。
+
 - `/danmaku/chat/房间名?key=密钥` 为管理端发送弹幕和动态配置房间设置（透明度、emoji、superchat、gift、置顶/置底定位开关）的界面
