@@ -13,3 +13,9 @@ node_modules/
 
 # QQ 官方机器人桥接器的私密配置（含 AppSecret）
 bridges/qqbot_bridge.json
+
+# 就地备份（改文件前留的 .bak-日期 之类），不进仓库
+*.bak-*
+*.bak_*
+*.orig
+*.rej

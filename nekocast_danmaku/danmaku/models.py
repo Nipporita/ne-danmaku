@@ -525,7 +525,7 @@ class DanmakuFilter:
         self.dedup_window = dedup_window  # 去重时间窗口（秒）
 
         # 记录最近弹幕：
-        # group -> deque[(text, timestamp)]
+        # group -> deque[((发送者, 文本), timestamp)]
         self.recent_messages: dict[str, deque] = defaultdict(deque)
 
         self.blacklist: BlacklistService | None = blacklist
@@ -552,15 +552,21 @@ class DanmakuFilter:
                 while recent and current_time - recent[0][1] > self.dedup_window:
                     recent.popleft()
 
+                # 去重键 = (发送者, 文本)。
+                # 只拦"同一个人短时间内的重复弹幕"；不同的人发同一句话（报名刷「1」、
+                # 打分刷同一个数字）必须都能放行，所以 key 里必须带上发送者。
+                sender_key = message.senderId or message.sender or ""
+                key = (sender_key, text)
+
                 # 检查是否出现过完全相同的弹幕
-                for recent_text, _ in recent:
-                    if recent_text == text:
-                        logger.info("重复消息被标记: {}...", text[:20])
+                for recent_key, _ in recent:
+                    if recent_key == key:
+                        logger.info("重复消息被标记: {} / {}...", sender_key, text[:20])
                         message.mark_blocked(BLOCK_REASON_DUPLICATE)
                         break
                 else:
                     # 不是重复才记录（重复消息不占去重槽位）
-                    recent.append((text, current_time))
+                    recent.append((key, current_time))
 
     def close(self) -> None:
         """关闭过滤器，释放资源"""
@@ -661,19 +667,15 @@ class ConnectionManager:
         if group not in self.client_connections:
             return
 
-        # 过滤检查（标记 blocked 标志，不丢弃消息）
-        if self.danmaku_filter:
-            self.danmaku_filter.check_message(group, message)
+        # 这条消息"到达时"是不是外部图片（群里贴的图），供下面那个房间开关判断。
+        # 先记下来：内置表情解析会把 Plain 变成 EmoteMessage，之后就区分不出来了。
+        arrived_as_external_emote = isinstance(message, EmoteMessage)
 
-        # 外部表情过滤：到达此处已是 EmoteMessage 的来自外部源
-        if (
-            isinstance(message, EmoteMessage)
-            and self.room_settings_service is not None
-            and not self.room_settings_service.get(group).enable_external_emoji
-        ):
-            return
-
-        # 内置表情解析：将 [emote_name] 文本转为 EmoteMessage
+        # 内置表情解析：将 [emote_name] 文本转为 EmoteMessage。
+        # ⚠ 必须放在黑名单检查之前：blacklist.txt 第一条就是 ^\[.*\]$，
+        #    会把整条 [名字] 先标记成 blocked，解析器根本轮不到。
+        #    （表情名是自己配的内容，没必要再走文本黑名单；
+        #      用户黑名单对下面的 EmoteMessage 依然生效。）
         if (
             isinstance(message, PlainDanmakuMessage)
             and self.emote_resolver is not None
@@ -689,6 +691,18 @@ class ConnectionManager:
                     is_special=message.is_special,
                     blocked=message.blocked,
                 )
+
+        # 过滤检查（标记 blocked 标志，不丢弃消息；黑名单 + 同一发送者短时间重复）
+        if self.danmaku_filter:
+            self.danmaku_filter.check_message(group, message)
+
+        # 外部表情过滤：只针对"群里贴的原图"，受房间开关控制
+        if (
+            arrived_as_external_emote
+            and self.room_settings_service is not None
+            and not self.room_settings_service.get(group).enable_external_emoji
+        ):
+            return
 
         # 字数上限截断（对外部来源静默截断，上游 WS 已有前置校验）
         # 必须放在表情解析之后：EMOTE_PATTERN 要求 [name] 完整闭合，
