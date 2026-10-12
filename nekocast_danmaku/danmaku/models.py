@@ -525,7 +525,7 @@ class DanmakuFilter:
         self.dedup_window = dedup_window  # 去重时间窗口（秒）
 
         # 记录最近弹幕：
-        # group -> deque[((发送者, 文本), timestamp)]
+        # group -> deque[(文本, timestamp)]
         self.recent_messages: dict[str, deque] = defaultdict(deque)
 
         self.blacklist: BlacklistService | None = blacklist
@@ -552,21 +552,20 @@ class DanmakuFilter:
                 while recent and current_time - recent[0][1] > self.dedup_window:
                     recent.popleft()
 
-                # 去重键 = (发送者, 文本)。
-                # 只拦"同一个人短时间内的重复弹幕"；不同的人发同一句话（报名刷「1」、
-                # 打分刷同一个数字）必须都能放行，所以 key 里必须带上发送者。
-                sender_key = message.senderId or message.sender or ""
-                key = (sender_key, text)
-
-                # 检查是否出现过完全相同的弹幕
-                for recent_key, _ in recent:
-                    if recent_key == key:
-                        logger.info("重复消息被标记: {} / {}...", sender_key, text[:20])
+                # ⚠ 去重键是**纯文本**，不带发送者。
+                #   晚会现场一群人在群里刷同样的「+1」，展示层（DanmakuDisplay）
+                #   就是靠这个把刷屏压成一条的；带上发送者等于把去重关掉。
+                # ⚠ 但消息**只标记、绝不丢弃**：danmaku-app 必须原封不动地看到
+                #   每一条群消息（它只读 block_reasons 里的 user_blacklist，不看
+                #   duplicate），否则"一群人发 +1 报名"会变成只有第一个人报上名。
+                for recent_text, _ in recent:
+                    if recent_text == text:
+                        logger.info("重复消息被标记: {}...", text[:20])
                         message.mark_blocked(BLOCK_REASON_DUPLICATE)
                         break
                 else:
                     # 不是重复才记录（重复消息不占去重槽位）
-                    recent.append((key, current_time))
+                    recent.append((text, current_time))
 
     def close(self) -> None:
         """关闭过滤器，释放资源"""
