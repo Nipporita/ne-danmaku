@@ -19,6 +19,24 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_ASSET_DIR = PROJECT_ROOT / "assets_danmaku"
 
+# 默认的第三方词库（blacklist/ 下以 git submodule 引入的开源词表）。
+# 配置里**不写** blacklist_extra_files 时就用这一套，所以克隆下来 +
+# `git submodule update --init --recursive` 之后开箱即用；
+# 不存在的文件只是警告（没检出 submodule 也能正常启动）。
+DEFAULT_BLACKLIST_EXTRA_FILES = [
+    "blacklist/sensitive-stop-words/广告.txt",
+    "blacklist/Sensitive-lexicon/Vocabulary/广告类型.txt",
+    "blacklist/sensitive-stop-words/色情类.txt",
+    "blacklist/Sensitive-lexicon/Vocabulary/色情类型.txt",
+    "blacklist/sensitive-stop-words/涉枪涉爆违法信息关键词.txt",
+    "blacklist/Sensitive-lexicon/Vocabulary/涉枪涉爆.txt",
+    "blacklist/Sensitive-lexicon/Vocabulary/暴恐词库.txt",
+    "blacklist/sensitive-stop-words/政治类.txt",
+    "blacklist/Sensitive-lexicon/Vocabulary/政治类型.txt",
+    "blacklist/Sensitive-lexicon/Vocabulary/其他词库.txt",
+    "blacklist/Sensitive-lexicon/Vocabulary/补充词库.txt",
+]
+
 
 # =========================
 # 配置结构
@@ -112,10 +130,12 @@ class DanmakuConfig(BaseModel):
     blacklist_file: Optional[Path] = None
     forbidden_users_file: Optional[Path] = None
 
-    # 额外的「词表」文件：第三方开源词库（一般以 git submodule 放进 blacklist/ 目录，
+    # 额外的「词表」文件：第三方开源词库（以 git submodule 放进 blacklist/ 目录，
     # 直接引用别人的仓库，词表内容不进本仓库的历史）。
     # 与 blacklist_file 不同：这些文件按**字面量**匹配（词表不是正则），
     # 也不会被管理端的增删改写回。详见 BlacklistService.load_literal_patterns。
+    # **不写（或写空数组）就用默认的那套**（DEFAULT_BLACKLIST_EXTRA_FILES，
+    # 即 blacklist/ 下的标准词库），所以一般不用配置这个字段。
     blacklist_extra_files: list[Path] = Field(default_factory=list)
 
     @property
@@ -124,7 +144,18 @@ class DanmakuConfig(BaseModel):
 
     @property
     def resolved_blacklist_extra_files(self) -> list[Path]:
-        return list(self.blacklist_extra_files)
+        """实际要加载的额外词表
+
+        * 配置里没写（空列表）→ 用默认那套（blacklist/ 下的标准词库）；
+          文件不存在只是警告，不影响启动；
+        * 相对路径按**仓库根目录**解析（而不是进程当前目录），跟 asset_dir 的默认值一致。
+        """
+        configured = list(self.blacklist_extra_files) or list(DEFAULT_BLACKLIST_EXTRA_FILES)
+        resolved: list[Path] = []
+        for item in configured:
+            path = Path(item)
+            resolved.append(path if path.is_absolute() else PROJECT_ROOT / path)
+        return resolved
 
     @property
     def resolved_forbidden_users_file(self) -> Path:

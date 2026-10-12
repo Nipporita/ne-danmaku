@@ -139,6 +139,16 @@ uv run main.py
 | `blacklist_file` | 自己的规则（默认 `assets_danmaku/blacklist.txt`） | **正则**，管理端可以现场增删并写回该文件 |
 | `blacklist_extra_files` | 第三方开源词库（见下） | **字面量**（词表不是正则），只读，不会被写回 |
 
+`blacklist_extra_files` **不用手写**：配置里不写（或写空数组）就自动用
+`nekocast_danmaku/config.py` 里的 `DEFAULT_BLACKLIST_EXTRA_FILES` ——
+也就是 `blacklist/` 下那套标准词库（11 份：广告 / 色情 / 涉枪涉爆 / 暴恐 / 政治 / 其他 / 补充）。
+相对路径按**仓库根目录**解析，不必担心从哪个目录启动；文件不存在只警告、不影响启动。
+想只用其中几份、或加自己的词表，就显式写出来（写了就以你写的为准）：
+
+```json
+"blacklist_extra_files": ["blacklist/sensitive-stop-words/广告.txt"]
+```
+
 ### 第三方词库（git submodule）
 
 `blacklist/` 下直接引用了别人的仓库，词表内容**不进本仓库的历史**（只记录 commit 指针）：

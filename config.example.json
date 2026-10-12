@@ -119,6 +119,21 @@
     "room_db_path": "room.db",
     "dedup_window": 5,
     "asset_dir": "assets_danmaku",
+    "blacklist_file": "assets_danmaku/blacklist.txt",
+    "forbidden_users_file": "assets_danmaku/forbidden_users.txt",
+    "blacklist_extra_files": [
+      "blacklist/sensitive-stop-words/广告.txt",
+      "blacklist/Sensitive-lexicon/Vocabulary/广告类型.txt",
+      "blacklist/sensitive-stop-words/色情类.txt",
+      "blacklist/Sensitive-lexicon/Vocabulary/色情类型.txt",
+      "blacklist/sensitive-stop-words/涉枪涉爆违法信息关键词.txt",
+      "blacklist/Sensitive-lexicon/Vocabulary/涉枪涉爆.txt",
+      "blacklist/Sensitive-lexicon/Vocabulary/暴恐词库.txt",
+      "blacklist/sensitive-stop-words/政治类.txt",
+      "blacklist/Sensitive-lexicon/Vocabulary/政治类型.txt",
+      "blacklist/Sensitive-lexicon/Vocabulary/其他词库.txt",
+      "blacklist/Sensitive-lexicon/Vocabulary/补充词库.txt"
+    ],
     "emote_alias_token": "表情别名管理 token，请修改",
     "max_message_length": 50
   }
