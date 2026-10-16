@@ -9,6 +9,10 @@ from typing import Literal, cast
 
 from aiocqhttp import CQHttp, Event, Message
 from loguru import logger
+
+# 成员 id -> 是否群主/管理员（OneBot 的消息事件带 sender.role，
+# 贴表情/撤回事件不带，靠这份缓存兜底；只升不降）
+_member_admin: dict = {}
 from uvicorn import Config, Server
 
 from ..config import OneBotV11Config
@@ -27,7 +31,12 @@ from .danmaku_class.danmaku_message import (
     PlainDanmakuMessage,
     SuperChatMessage,
 )
-from .game_events import onebot_role_is_admin, recall_frame, reaction_frame
+from .game_events import (
+    onebot_role_is_admin,
+    recall_frame,
+    reaction_frame,
+    resolve_admin_from_role,
+)
 from .event_probe import mark_handled, record as probe_record
 from .models import ConnectionManager
 
@@ -36,6 +45,28 @@ onebot_task: Task | None = None
 onebot_bot: CQHttp | None = None
 onebot_server: Server | None = None
 
+
+async def refresh_onebot_admins(config) -> None:
+    """群管理员/群主变动 → **强制重算**：清空后按各配置群的成员列表重建。
+
+    OneBot 的 ``notice.group_admin``（set/unset）会通知管理员变更；
+    群主变更通常也带出成员信息变化，所以一次完整重算最稳。
+    """
+    _member_admin.clear()
+    admins = 0
+    for gid in list(config.group_map.keys()):
+        try:
+            members = await onebot_bot.call_api("get_group_member_list", group_id=int(gid))
+        except Exception as exc:  # noqa: BLE001 —— 某个群查不到就跳过
+            logger.debug("拉取群 {} 成员列表失败（忽略）：{}", gid, exc)
+            continue
+        for m in members or []:
+            if isinstance(m, dict) and onebot_role_is_admin(m.get("role")):
+                uid = str(m.get("user_id", ""))
+                if uid:
+                    _member_admin[uid] = True
+                    admins += 1
+    logger.info("群角色变动 → OneBot 管理员名单已强制重算：{} 人", admins)
 
 def _get_sender_name(event: Event, fallback_user_id: str) -> str:
     sender = event.get("sender") or {}
@@ -237,7 +268,12 @@ async def start_onebot_v11_client(
         # 放在余额不足降级（to_plain 会重建对象）之后，否则会被丢掉
         raw_message_id = event.get("message_id")
         danmaku.message_id = str(raw_message_id) if raw_message_id is not None else None
-        danmaku.is_admin = onebot_role_is_admin((event.get("sender") or {}).get("role"))
+        _sender_role = (event.get("sender") or {}).get("role")
+        _sender_uid = str(event.get("user_id", ""))
+        danmaku.is_admin = resolve_admin_from_role(_sender_role, _member_admin, _sender_uid)
+        if danmaku.is_admin and _sender_uid:
+            # 只升不降：说过话的管理员从此留在缓存里，贴表情时才能就地认人
+            _member_admin[_sender_uid] = True
 
         await connection_manager.broadcast_to_group(danmaku_group, danmaku)
 
@@ -267,6 +303,17 @@ async def start_onebot_v11_client(
         )
         await connection_manager.broadcast_frame(danmaku_group, frame)
 
+    @onebot_bot.on_notice("group_admin")
+    async def handle_group_admin(event: Event):
+        """群管理员被设置/取消（换群主也会带出这类通知）→ 强制重算管理员名单"""
+        group_id = str(event.get("group_id", ""))
+        if config.group_map.get(group_id) is None:
+            return
+        logger.info("收到群管理员变更通知：群 {}，用户 {}，{}",
+                    group_id, event.get("user_id"), event.get("sub_type"))
+        await refresh_onebot_admins(config)
+
+
     @onebot_bot.on_notice("group_msg_emoji_like")
     async def handle_group_msg_emoji_like(event: Event):
         """有人给某条消息贴了表情（或取消了）→ 推给大屏（游戏侧用作答题审核）"""
@@ -292,13 +339,41 @@ async def start_onebot_v11_client(
             channel_id=group_id,
             action=action,
         )
+        # 审核认的是「群主/管理员」贴的表情（需求⑤）。OneBot 的贴表情事件不带角色，
+        # 所以先查消息事件里记下的缓存；缓存里没有这个人，就按需问一次上游 ——
+        # 与 Satori 通道（连上时建成员角色缓存）保持一致，主持人不发言也能审核。
+        _reactor = str(frame["sender_id"] or "")
+        _is_admin = resolve_admin_from_role(
+            (event.get("sender") or {}).get("role"), _member_admin, _reactor
+        )
+        if not _is_admin and _reactor and _reactor not in _member_admin:
+            try:
+                _info = await onebot_bot.call_api(
+                    "get_group_member_info",
+                    group_id=int(group_id),
+                    user_id=int(_reactor),
+                    no_cache=True,
+                )
+                _is_admin = onebot_role_is_admin((_info or {}).get("role"))
+            except Exception as exc:  # noqa: BLE001 —— 查不到也不能影响审核帧下发
+                logger.debug("查询群成员角色失败（忽略）：{}", exc)
+            if _is_admin:
+                # 只升不降：他在任何一个配置群里是管理员，就算管理员
+                _member_admin[_reactor] = True
+                logger.info("按需查到 {} 是群主/管理员（群 {}）", _reactor, group_id)
+            elif not _member_admin.get(_reactor):
+                # 记下"问过了、不是管理员"：同一个普通成员每次贴表情都问一次上游太亏（并集语义不受影响）
+                _member_admin[_reactor] = False
+        frame["is_admin"] = bool(_is_admin)
+
         logger.info(
-            "表情事件：{}，群 {}, 消息 {}, 用户 {}, 表情 {}",
+            "表情事件：{}，群 {}, 消息 {}, 用户 {}, 表情 {}, 管理员 {}",
             "取消" if action == "remove" else "贴",
             danmaku_group,
             frame["message_id"],
             frame["sender_id"],
             frame["emoji"],
+            frame["is_admin"],
         )
         await connection_manager.broadcast_frame(danmaku_group, frame)
 

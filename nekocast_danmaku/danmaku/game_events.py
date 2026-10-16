@@ -73,6 +73,68 @@ def onebot_role_is_admin(role) -> bool:
     """OneBot 11 的 ``sender.role``（"owner" / "admin" / "member"）→ 是否主持人"""
     return isinstance(role, str) and role.strip().lower() in ADMIN_ROLE_NAMES
 
+def resolve_admin_from_role(role, member_admin=None, user_id=None) -> bool:
+    """OneBot 版判断：``sender.role``（owner/admin/member）优先，其次查缓存。
+
+    很多 OneBot 事件（贴表情、撤回）**不带**操作者的角色，只有 user_id ——
+    所以要在消息事件里把管理员身份记进 ``member_admin``，这里再兜一层。
+    """
+    if onebot_role_is_admin(role):
+        return True
+    if not member_admin or user_id is None:
+        return False
+    # int / str 两种 key 形态都试一遍（上游给的是数字还是字符串并不稳定）
+    if member_admin.get(user_id) or member_admin.get(str(user_id)):
+        return True
+    try:
+        return bool(member_admin.get(int(user_id)))
+    except (TypeError, ValueError):
+        return False
+
+
+def same_guild_id(raw_id, group_ids) -> bool:
+    """比较群 id 时容忍各种写法。
+
+    各上游给的群 id 形态并不统一：可能是 int、带前后空格，也可能带平台前缀
+    （LLBot 的消息 id 就长成 ``2|874090738|1151``）。直接 `in` 会让整个群的
+    成员缓存都不建，于是群主也认不出来。
+    """
+    def norm(value) -> str:
+        # 群号的位置：裸号 "874090738" 取第 1 段；带平台前缀的 "2|874090738" 或
+        #   "2|874090738|1151"（平台|群号|消息序号）都要取**第 2 段**。
+        # ⚠ 不能取最后一段：三段式会取成消息序号，认群直接失效（审计发现）。
+        parts = [p.strip() for p in str(value).split("|") if p.strip()]
+        if not parts:
+            return ""
+        return parts[1] if len(parts) >= 2 else parts[0]
+
+    return norm(raw_id) in {norm(k) for k in group_ids}
+
+
+def resolve_is_admin(member, member_admin=None, user_id=None) -> bool:
+    """综合两层来源判断某人是不是群主/管理员。
+
+    1. 事件自带的 ``member.roles``（Satori 的 MessageEvent.member）；
+    2. ``member_admin`` 缓存 —— Satori 连上时用 ``guild.member.list`` 建好的
+       「用户 id → 是否管理员」。
+
+    为什么必须有两层：LLBot 的 ``transformGroupMember`` 用 ``data.role.toString()``
+    当角色 id，而**群消息载荷里的 member 往往不带真实 role**（拿到 "undefined"）——
+    于是 ``roles`` 字段在、但 id 认不出来，群主会一直被当成普通成员。
+    贴表情事件更是完全没有 member，从来只能靠缓存。这里统一两条路。
+    """
+    if member is not None and member_is_admin(member):
+        return True
+    if not member_admin or user_id is None:
+        return False
+    # 上游给的是数字还是字符串并不稳定：str / int 两种 key 形态都试一遍
+    if member_admin.get(user_id) or member_admin.get(str(user_id)):
+        return True
+    try:
+        return bool(member_admin.get(int(user_id)))
+    except (TypeError, ValueError):
+        return False
+
 
 def _text(value) -> str:
     return "" if value is None else str(value)
