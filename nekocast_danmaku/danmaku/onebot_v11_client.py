@@ -46,6 +46,44 @@ onebot_bot: CQHttp | None = None
 onebot_server: Server | None = None
 
 
+async def warm_onebot_admins(config) -> None:
+    """启动时预热：把配置群里所有群主/管理员记进缓存。
+
+    ⚠ 必须等 LLBot 连上来再查：on_startup 时 OneBot 侧通常还没握手，这时 call_action
+      会直接失败（异常消息还是空的，看不出原因）。所以带重试。
+    """
+    total = len(config.group_map)
+    for attempt in range(1, 13):        # 最多 12 次 × 10 秒 ≈ 2 分钟
+        if attempt > 1:
+            await asyncio.sleep(10)
+        ok = 0
+        for gid in list(config.group_map.keys()):
+            try:
+                members = await onebot_bot.call_action(
+                    "get_group_member_list", group_id=int(gid)
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "启动预热（第 {} 次）：拉群 {} 成员列表失败：{} {!r}",
+                    attempt, gid, type(exc).__name__, exc,
+                )
+                continue
+            ok += 1
+            n = 0
+            for m in members or []:
+                if isinstance(m, dict) and onebot_role_is_admin(m.get("role")):
+                    uid = str(m.get("user_id", ""))
+                    if uid:
+                        _member_admin[uid] = True
+                        n += 1
+            logger.info("启动预热：群 {} 抓到 {} 个管理员/群主", gid, n)
+        if ok:
+            logger.info("启动预热完成（第 {} 次，成功 {}/{} 个群）", attempt, ok, total)
+            return
+    logger.warning(
+        "启动预热失败：LLBot 一直没连上，或上游不支持 get_group_member_list"
+    )
+
 async def refresh_onebot_admins(config) -> None:
     """群管理员/群主变动 → **强制重算**：清空后按各配置群的成员列表重建。
 
@@ -56,7 +94,7 @@ async def refresh_onebot_admins(config) -> None:
     admins = 0
     for gid in list(config.group_map.keys()):
         try:
-            members = await onebot_bot.call_api("get_group_member_list", group_id=int(gid))
+            members = await onebot_bot.call_action("get_group_member_list", group_id=int(gid))
         except Exception as exc:  # noqa: BLE001 —— 某个群查不到就跳过
             logger.debug("拉取群 {} 成员列表失败（忽略）：{}", gid, exc)
             continue
@@ -346,24 +384,27 @@ async def start_onebot_v11_client(
         _is_admin = resolve_admin_from_role(
             (event.get("sender") or {}).get("role"), _member_admin, _reactor
         )
-        if not _is_admin and _reactor and _reactor not in _member_admin:
+        # ⚠ 只有缓存里明确是 True 才免查；False / 缺失都允许再问一次 ——
+        #   之前"查询失败也写 False"，于是主持人第一次没查到就被永久锁成"非主持人"，
+        #   之后贴多少次表情都审不了（现场踩过）。
+        if not _is_admin and _reactor and _member_admin.get(_reactor) is not True:
             try:
-                _info = await onebot_bot.call_api(
+                _info = await onebot_bot.call_action(
                     "get_group_member_info",
                     group_id=int(group_id),
                     user_id=int(_reactor),
-                    no_cache=True,
                 )
-                _is_admin = onebot_role_is_admin((_info or {}).get("role"))
+                _role = (_info or {}).get("role")
+                _is_admin = onebot_role_is_admin(_role)
+                # 这次拿到了权威结果（不管是不是管理员）才写缓存
+                _member_admin[_reactor] = bool(_is_admin)
+                if _is_admin:
+                    logger.info("按需查到 {} 是群主/管理员（群 {}，role={}）", _reactor, group_id, _role)
+                else:
+                    logger.info("按需查询：{} 在群 {} 不是管理员（role={}）", _reactor, group_id, _role)
             except Exception as exc:  # noqa: BLE001 —— 查不到也不能影响审核帧下发
-                logger.debug("查询群成员角色失败（忽略）：{}", exc)
-            if _is_admin:
-                # 只升不降：他在任何一个配置群里是管理员，就算管理员
-                _member_admin[_reactor] = True
-                logger.info("按需查到 {} 是群主/管理员（群 {}）", _reactor, group_id)
-            elif not _member_admin.get(_reactor):
-                # 记下"问过了、不是管理员"：同一个普通成员每次贴表情都问一次上游太亏（并集语义不受影响）
-                _member_admin[_reactor] = False
+                # ⚠ 失败**不写缓存**：可能是上游抖动或接口不支持，写死 False 会让人永远当不了主持人
+                logger.warning("查询群成员角色失败（不缓存，下次再试）：{}", exc)
         frame["is_admin"] = bool(_is_admin)
 
         logger.info(
@@ -384,6 +425,8 @@ async def start_onebot_v11_client(
             config.host,
             config.port,
         )
+        # 后台预热配置群里所有群主/管理员（群多时要拉一会儿，不能卡启动）
+        asyncio.create_task(warm_onebot_admins(config))
 
     # 事件探针：OneBot 侧的同款兜底登记（含未被处理的 notice 类型）
     mark_handled("message.group", "notice.group_recall", "notice.group_msg_emoji_like")
